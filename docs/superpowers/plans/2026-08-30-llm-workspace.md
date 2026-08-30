@@ -519,7 +519,7 @@ git commit -m "feat: manage streaming LLM runs"
 - Produces: `exa.Client.Search(ctx, provider.ExaConfig, SearchRequest) (json.RawMessage,error)`
 - Produces: `llm.ExaService.Execute(ctx, sessionID, panelID string) (session.Panel,error)`
 
-- [ ] **Step 1: Write failing strict detection table**
+- [x] **Step 1: Write failing strict detection table**
 
 ```go
 func TestDetectAcceptsOnlyExactExaObject(t *testing.T) {
@@ -538,19 +538,19 @@ func TestDetectAcceptsOnlyExactExaObject(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement DisallowUnknownFields detection**
+- [x] **Step 2: Implement DisallowUnknownFields detection**
 
 Decode exactly one object, require EOF after it, exact tool name, non-empty trimmed query and 1–100 results.
 
-- [ ] **Step 3: Write failing official field mapping and Panel result tests**
+- [x] **Step 3: Write failing official field mapping and Panel result tests**
 
 Use `httptest.Server` to assert `x-api-key`, `query`, camelCase `numResults`, and `contents.text=true`; return literal JSON and assert `ExaService` creates one formatted child Panel only on 2xx.
 
-- [ ] **Step 4: Implement bounded Exa Client and Service**
+- [x] **Step 4: Implement bounded Exa Client and Service**
 
 Use request Context, config timeout/max bytes, redact Key from errors, pretty-print validated response JSON, title result `Exa: <query>`, and store request summary in Result metadata. Do not create a Panel on any failure.
 
-- [ ] **Step 5: Verify and commit Task 7**
+- [x] **Step 5: Verify and commit Task 7**
 
 Run: `go test ./internal/exa ./internal/llm -count=1 -v`
 
