@@ -63,6 +63,7 @@ const backendUI = {
   start: document.querySelector("#backend-start"),
   stop: document.querySelector("#backend-stop"),
   edit: document.querySelector("#backend-edit"),
+  copy: document.querySelector("#backend-copy"),
   delete: document.querySelector("#backend-delete"),
   command: document.querySelector("#backend-command-preview"),
   pid: document.querySelector("#backend-pid"),
@@ -195,7 +196,7 @@ function renderSelectedBackend() {
     backendUI.pid.textContent = "—";
     backendUI.uptime.textContent = "—";
     backendUI.workdir.textContent = "—";
-    for (const control of [backendUI.start, backendUI.stop, backendUI.edit, backendUI.delete, backendUI.logSave, backendUI.logClear]) {
+    for (const control of [backendUI.start, backendUI.stop, backendUI.edit, backendUI.copy, backendUI.delete, backendUI.logSave, backendUI.logClear]) {
       control.disabled = true;
     }
     backendLogText = "";
@@ -216,6 +217,7 @@ function renderSelectedBackend() {
   backendUI.start.disabled = active;
   backendUI.stop.disabled = !active;
   backendUI.edit.disabled = false;
+  backendUI.copy.disabled = false;
   backendUI.delete.disabled = active;
   backendUI.logSave.disabled = !run;
   backendUI.logClear.disabled = !run;
@@ -390,6 +392,11 @@ backendUI.stop.addEventListener("click", () => runBackendAction("stop"));
 backendUI.edit.addEventListener("click", () => {
   const profile = backendProfiles.find((item) => item.id === selectedBackendID);
   if (profile) openBackendEditor(profile);
+});
+backendUI.copy.addEventListener("click", () => {
+  const profile = backendProfiles.find((item) => item.id === selectedBackendID);
+  if (!profile) return;
+  openBackendEditor({ ...profile, id: "", name: `${profile.name} 副本` });
 });
 backendUI.delete.addEventListener("click", async () => {
   const profile = backendProfiles.find((item) => item.id === selectedBackendID);

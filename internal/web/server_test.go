@@ -162,6 +162,7 @@ func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) 
 		`id="backend-command"`,
 		`id="backend-start"`,
 		`id="backend-stop"`,
+		`id="backend-copy"`,
 		`id="backend-log"`,
 		`id="backend-log-save"`,
 		`id="backend-log-clear"`,
