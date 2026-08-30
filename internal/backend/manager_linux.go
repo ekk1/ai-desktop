@@ -170,7 +170,7 @@ func (manager *Manager) Stop(ctx context.Context, profileID string) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return manager.killAfterContext(pid, done, ctx.Err())
 	case <-timer.C:
 	}
 	if err := signalProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
@@ -180,7 +180,24 @@ func (manager *Manager) Stop(ctx context.Context, profileID string) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return manager.waitAfterKill(done, ctx.Err())
+	}
+}
+
+func (manager *Manager) killAfterContext(pid int, done <-chan struct{}, contextErr error) error {
+	killErr := signalProcessGroup(pid, syscall.SIGKILL)
+	if errors.Is(killErr, syscall.ESRCH) {
+		killErr = nil
+	}
+	return errors.Join(contextErr, killErr, manager.waitAfterKill(done, nil))
+}
+
+func (manager *Manager) waitAfterKill(done <-chan struct{}, prior error) error {
+	select {
+	case <-done:
+		return prior
+	case <-time.After(time.Second):
+		return errors.Join(prior, fmt.Errorf("backend process did not exit after SIGKILL"))
 	}
 }
 

@@ -70,6 +70,36 @@ func TestManagerStopsWholeProcessGroup(t *testing.T) {
 	}
 }
 
+func TestManagerKillsProcessGroupWhenStopContextExpires(t *testing.T) {
+	manager, repository := newTestManager(t)
+	profile := createTestProfile(t, repository, "timeout", "trap '' TERM; printf 'ready'; while :; do sleep 1; done")
+	profile.StopGraceSeconds = 10
+	profile, err := repository.Update(profile.ID, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := manager.Start(profile.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Kill(-run.PID, syscall.SIGKILL)
+	waitForLog(t, manager, profile.ID, "ready")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = manager.Stop(ctx, profile.ID)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop error = %v, want deadline exceeded", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for syscall.Kill(run.PID, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(run.PID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("backend PID %d survived expired Stop context: %v", run.PID, err)
+	}
+}
+
 func TestManagerSavesCrashLogOnlyForUnexpectedFailure(t *testing.T) {
 	manager, repository := newTestManager(t)
 	profile := createTestProfile(t, repository, "crash", "printf 'fatal output'; exit 7")
