@@ -140,7 +140,7 @@ git commit -m "feat: configure image providers"
 - Produces: `OpenRepository(root string) (*Repository,error)` and Batch/Item/Attempt mutation methods below
 - Consumes: Provider ID as a stable string; Repository does not import config or sdcpp
 
-- [ ] **Step 1: Write failing Batch and Item CRUD/order tests**
+- [x] **Step 1: Write failing Batch and Item CRUD/order tests**
 
 ```go
 func TestRepositoryPersistsOrderedBatchItems(t *testing.T) {
@@ -159,13 +159,13 @@ func TestRepositoryPersistsOrderedBatchItems(t *testing.T) {
 
 Add table-driven `TestRepositoryRejectsInvalidBatchAndItemInputs` covering empty title, missing Provider ID, concurrency 0/17, non-Object JSON and every reserved managed key. Add `TestRepositoryRejectsMissingItemAndOutOfBoundsMove` asserting `ErrItemNotFound` and `ErrMoveBoundary` without mutating the stored Batch.
 
-- [ ] **Step 2: Run repository CRUD tests and verify RED**
+- [x] **Step 2: Run repository CRUD tests and verify RED**
 
 Run: `go test ./internal/imagegen -run 'TestRepository(Persists|Rejects)' -count=1 -v`
 
 Expected: FAIL because package/types do not exist.
 
-- [ ] **Step 3: Implement exact model and one-file-per-Batch Repository**
+- [x] **Step 3: Implement exact model and one-file-per-Batch Repository**
 
 ```go
 type InputAssets struct {
@@ -221,7 +221,7 @@ UpdateAttempt(string,string,string,UpdateAttemptInput) (Attempt,error)
 
 `CreateAttemptInput` contains State and Snapshot. `UpdateAttemptInput` contains State, RemoteJobID, RemoteStatus, QueuePosition, ResultAssetIDs and AttemptError; Repository owns all timestamps and ignores no fields silently.
 
-- [ ] **Step 4: Write failing Attempt history and interrupted recovery tests**
+- [x] **Step 4: Write failing Attempt history and interrupted recovery tests**
 
 ```go
 func TestRepositoryKeepsAttemptHistoryAndInterruptsActiveOnReopen(t *testing.T) {
@@ -239,15 +239,15 @@ func TestRepositoryKeepsAttemptHistoryAndInterruptsActiveOnReopen(t *testing.T) 
 }
 ```
 
-- [ ] **Step 5: Run Attempt recovery tests and verify RED**
+- [x] **Step 5: Run Attempt recovery tests and verify RED**
 
 Run: `go test ./internal/imagegen -run TestRepositoryKeepsAttemptHistory -count=1 -v`
 
-- [ ] **Step 6: Implement Attempt transitions and reopen recovery**
+- [x] **Step 6: Implement Attempt transitions and reopen recovery**
 
 Allowed forward transitions are queued→submitting/cancelled, submitting→polling/failed/cancelled, polling→succeeded/failed/cancelled, and any active state→interrupted during open. Terminal states never transition. ResultAssetIDs are unique; Error message is bounded to 4096 bytes; Snapshot and JSON fields deep-copy.
 
-- [ ] **Step 7: Verify and commit Task 2**
+- [x] **Step 7: Verify and commit Task 2**
 
 Run: `gofmt -w internal/imagegen && go test ./internal/imagegen -count=1 -v && git diff --check`
 
