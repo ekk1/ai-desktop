@@ -378,7 +378,7 @@ git commit -m "feat: assemble complete LLM requests"
 - Produces: `provider.Executor.Execute(ctx, PreparedRequest, func(string)) (ExecutionResult, error)`
 - Produces: `ExecutionResult{Content, StatusCode, ResponseExcerpt}` and typed limit/path/status errors
 
-- [ ] **Step 1: Write failing synchronous JSON tests using httptest.Server**
+- [x] **Step 1: Write failing synchronous JSON tests using httptest.Server**
 
 ```go
 func TestExecutorPostsExactBodyAndExtractsConfiguredJSONPath(t *testing.T) {
@@ -397,15 +397,15 @@ func TestExecutorPostsExactBodyAndExtractsConfiguredJSONPath(t *testing.T) {
 
 Add cases for non-2xx excerpt truncation, response limit, invalid path and context cancellation.
 
-- [ ] **Step 2: Run JSON Executor tests and verify RED**
+- [x] **Step 2: Run JSON Executor tests and verify RED**
 
 Run: `go test ./internal/provider -run TestExecutor -count=1 -v`
 
-- [ ] **Step 3: Implement bounded cancellable JSON execution**
+- [x] **Step 3: Implement bounded cancellable JSON execution**
 
 Use a per-request `http.Client` and `net.Dialer` from Provider timeouts, `io.LimitReader(max+1)`, exact JSON path traversal over `map[string]any` and `[]any`, and never log Headers.
 
-- [ ] **Step 4: Write failing standard SSE tests**
+- [x] **Step 4: Write failing standard SSE tests**
 
 ```go
 func TestExecutorStreamsLlamaSSEAndIgnoresPing(t *testing.T) {
@@ -429,11 +429,11 @@ func TestSSEJoinsMultipleDataLinesAndHandlesDone(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Implement SSE parser and incremental extraction**
+- [x] **Step 5: Implement SSE parser and incremental extraction**
 
 Scan with an explicit maximum event line size, join data lines with newline, ignore comments/event/id/retry fields, accept `[DONE]`, enforce aggregate response size, and stop when configured boolean done path is true.
 
-- [ ] **Step 6: Verify and commit Task 5**
+- [x] **Step 6: Verify and commit Task 5**
 
 Run: `go test ./internal/provider -count=1 -v`
 
