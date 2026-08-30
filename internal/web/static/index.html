@@ -152,6 +152,46 @@
             </article>
           </div>
         </section>
+
+        <section class="gallery-workspace" id="gallery-workspace" hidden>
+          <div class="gallery-toolbar">
+            <div>
+              <p class="section-kicker">共享资产</p>
+              <h2>Gallery</h2>
+            </div>
+            <div class="button-row">
+              <button type="button" class="secondary-button" id="gallery-refresh">刷新</button>
+              <label class="primary-button file-button" for="gallery-file-input">导入资产</label>
+              <input id="gallery-file-input" type="file" multiple hidden>
+            </div>
+          </div>
+
+          <div class="gallery-filters">
+            <label>状态
+              <select id="gallery-filter">
+                <option value="">全部</option>
+                <option value="active">精选</option>
+                <option value="archive">归档</option>
+              </select>
+            </label>
+            <label class="gallery-search-field">搜索
+              <input id="gallery-search" type="search" placeholder="名称、备注或来源">
+            </label>
+          </div>
+
+          <div class="gallery-selection-bar">
+            <label class="checkbox-field"><input id="gallery-select-all" type="checkbox"> 选择当前结果</label>
+            <span id="gallery-selection-count">已选 0 项</span>
+            <div class="button-row compact-buttons">
+              <button type="button" class="text-button" id="gallery-activate" disabled>设为精选</button>
+              <button type="button" class="text-button" id="gallery-archive" disabled>移入归档</button>
+              <button type="button" class="text-button" id="gallery-export" disabled>导出 ZIP</button>
+            </div>
+          </div>
+
+          <p class="inline-message" id="gallery-message" aria-live="polite">正在读取资产…</p>
+          <div class="asset-grid" id="gallery-grid" aria-live="polite"></div>
+        </section>
       </main>
     </div>
   </div>
@@ -203,6 +243,56 @@
       <footer class="dialog-actions">
         <button type="button" class="secondary-button" id="backend-editor-cancel">取消</button>
         <button type="submit" class="primary-button">保存配置</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="gallery-preview" class="editor-dialog asset-preview-dialog">
+    <form id="gallery-preview-form">
+      <header class="dialog-heading">
+        <div>
+          <p class="eyebrow">资产详情</p>
+          <h2 id="gallery-preview-title">预览</h2>
+        </div>
+        <button type="button" class="text-button" id="gallery-preview-close">关闭</button>
+      </header>
+      <div class="asset-preview-media" id="gallery-preview-media"></div>
+      <div class="form-grid">
+        <label>显示名称 <input id="gallery-preview-name" required maxlength="240"></label>
+        <label>状态 <input id="gallery-preview-state" readonly></label>
+        <label class="full-width">备注 <textarea id="gallery-preview-notes" rows="4"></textarea></label>
+      </div>
+      <details class="advanced-form">
+        <summary>文件信息与引用</summary>
+        <dl class="compact-facts" id="gallery-preview-facts"></dl>
+        <div class="reference-list" id="gallery-preview-references"></div>
+      </details>
+      <p class="form-error" id="gallery-preview-error" role="alert"></p>
+      <footer class="dialog-actions">
+        <a class="secondary-button download-link" id="gallery-preview-download" download>下载</a>
+        <button type="button" class="text-button danger-text" id="gallery-preview-delete">删除</button>
+        <button type="submit" class="primary-button">保存</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="asset-picker" class="editor-dialog asset-picker-dialog">
+    <form method="dialog" id="asset-picker-form">
+      <header class="dialog-heading">
+        <div>
+          <p class="eyebrow">精选库</p>
+          <h2>选择资产</h2>
+        </div>
+        <button type="button" class="text-button" id="asset-picker-close">关闭</button>
+      </header>
+      <label class="gallery-search-field">搜索
+        <input id="asset-picker-search" type="search" placeholder="筛选精选资产">
+      </label>
+      <p class="inline-message" id="asset-picker-message"></p>
+      <div class="asset-grid compact-asset-grid" id="asset-picker-grid"></div>
+      <footer class="dialog-actions">
+        <button type="button" class="secondary-button" id="asset-picker-cancel">取消</button>
+        <button type="button" class="primary-button" id="asset-picker-confirm">选取</button>
       </footer>
     </form>
   </dialog>

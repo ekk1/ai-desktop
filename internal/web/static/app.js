@@ -53,6 +53,7 @@ const sidebarClose = document.querySelector(".sidebar-close");
 const sidebarScrim = document.querySelector(".sidebar-scrim");
 const emptyState = document.querySelector(".empty-state");
 const backendWorkspace = document.querySelector("#backend-workspace");
+const galleryWorkspace = document.querySelector("#gallery-workspace");
 
 const backendUI = {
   list: document.querySelector("#backend-list"),
@@ -112,13 +113,16 @@ function selectModule(name) {
   action.textContent = module.action;
   sidebarContent.append(description, action);
   const showBackends = name === "backends";
-  emptyState.hidden = showBackends;
+  const showGallery = name === "gallery";
+  emptyState.hidden = showBackends || showGallery;
   backendWorkspace.hidden = !showBackends;
+  galleryWorkspace.hidden = !showGallery;
   if (showBackends) {
     refreshBackends();
   } else {
     closeBackendLogEvents();
   }
+  if (showGallery) refreshGallery();
   window.location.hash = name;
   setSidebar(false);
 }
@@ -384,6 +388,330 @@ async function saveBackend(event) {
     errorArea.textContent = error.message;
   }
 }
+
+const galleryUI = {
+  fileInput: document.querySelector("#gallery-file-input"),
+  filter: document.querySelector("#gallery-filter"),
+  search: document.querySelector("#gallery-search"),
+  grid: document.querySelector("#gallery-grid"),
+  message: document.querySelector("#gallery-message"),
+  selectAll: document.querySelector("#gallery-select-all"),
+  selectionCount: document.querySelector("#gallery-selection-count"),
+  activate: document.querySelector("#gallery-activate"),
+  archive: document.querySelector("#gallery-archive"),
+  export: document.querySelector("#gallery-export"),
+};
+
+const galleryPreview = document.querySelector("#gallery-preview");
+const assetPicker = document.querySelector("#asset-picker");
+let galleryAssets = [];
+let selectedGalleryAssets = new Set();
+let previewAssetID = "";
+let pickerAssets = [];
+let selectedPickerAssets = new Set();
+let pickerAllowsMultiple = true;
+let pickerResolve = null;
+let gallerySearchTimer = null;
+
+function assetContentURL(id) {
+  return `/api/v1/assets/${encodeURIComponent(id)}/content`;
+}
+
+function formatBytes(size) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function createAssetMedia(item) {
+  const container = document.createElement("div");
+  container.className = "asset-media";
+  const url = assetContentURL(item.id);
+  if (item.media_type.startsWith("image/")) {
+    const image = document.createElement("img");
+    image.src = url;
+    image.alt = item.display_name;
+    image.loading = "lazy";
+    container.append(image);
+  } else if (item.media_type.startsWith("video/")) {
+    const video = document.createElement("video");
+    video.src = url;
+    video.controls = true;
+    video.preload = "metadata";
+    container.append(video);
+  } else {
+    const attachment = document.createElement("div");
+    attachment.className = "attachment-preview";
+    const type = document.createElement("strong");
+    type.textContent = item.media_type || "文件";
+    const size = document.createElement("span");
+    size.textContent = formatBytes(item.size);
+    attachment.append(type, size);
+    container.append(attachment);
+  }
+  return container;
+}
+
+function createAssetCard(item, selected, onSelect, onOpen = null) {
+  const card = document.createElement("article");
+  card.className = "asset-card";
+  card.dataset.state = item.state;
+  const selection = document.createElement("label");
+  selection.className = "asset-card-selection";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = selected;
+  checkbox.setAttribute("aria-label", `选择 ${item.display_name}`);
+  checkbox.addEventListener("change", () => onSelect(item, checkbox.checked));
+  const state = document.createElement("span");
+  state.textContent = item.state === "active" ? "精选" : "归档";
+  selection.append(checkbox, state);
+  card.append(selection, createAssetMedia(item));
+  const body = document.createElement("div");
+  body.className = "asset-card-body";
+  const name = document.createElement("strong");
+  name.title = item.display_name;
+  name.textContent = item.display_name;
+  const meta = document.createElement("small");
+  meta.textContent = `${formatBytes(item.size)} · ${item.media_type}`;
+  body.append(name, meta);
+  if (onOpen) {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "text-button asset-open";
+    open.textContent = "查看";
+    open.addEventListener("click", () => onOpen(item));
+    body.append(open);
+  }
+  card.append(body);
+  return card;
+}
+
+async function refreshGallery() {
+  galleryUI.message.textContent = "正在读取资产…";
+  const parameters = new URLSearchParams();
+  if (galleryUI.filter.value) parameters.set("state", galleryUI.filter.value);
+  if (galleryUI.search.value.trim()) parameters.set("q", galleryUI.search.value.trim());
+  try {
+    const suffix = parameters.size ? `?${parameters}` : "";
+    const response = await fetch(`/api/v1/assets${suffix}`);
+    if (!response.ok) throw new Error(await readAPIError(response));
+    galleryAssets = (await response.json()).assets ?? [];
+    const visibleIDs = new Set(galleryAssets.map((item) => item.id));
+    selectedGalleryAssets = new Set([...selectedGalleryAssets].filter((id) => visibleIDs.has(id)));
+    renderGallery();
+  } catch (error) {
+    galleryUI.message.textContent = `读取失败：${error.message}`;
+  }
+}
+
+function renderGallery() {
+  galleryUI.grid.replaceChildren();
+  galleryUI.message.textContent = galleryAssets.length ? "" : "当前筛选下没有资产。";
+  for (const item of galleryAssets) {
+    galleryUI.grid.append(createAssetCard(item, selectedGalleryAssets.has(item.id), (assetItem, checked) => {
+      if (checked) selectedGalleryAssets.add(assetItem.id);
+      else selectedGalleryAssets.delete(assetItem.id);
+      updateGallerySelection();
+    }, openGalleryPreview));
+  }
+  updateGallerySelection();
+}
+
+function updateGallerySelection() {
+  const count = selectedGalleryAssets.size;
+  galleryUI.selectionCount.textContent = `已选 ${count} 项`;
+  galleryUI.selectAll.checked = galleryAssets.length > 0 && count === galleryAssets.length;
+  galleryUI.selectAll.indeterminate = count > 0 && count < galleryAssets.length;
+  for (const button of [galleryUI.activate, galleryUI.archive, galleryUI.export]) button.disabled = count === 0;
+}
+
+async function setSelectedAssetState(state) {
+  galleryUI.message.textContent = "正在更新…";
+  const response = await fetch("/api/v1/assets/state", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asset_ids: [...selectedGalleryAssets], state }),
+  });
+  if (!response.ok) {
+    galleryUI.message.textContent = await readAPIError(response);
+    return;
+  }
+  selectedGalleryAssets.clear();
+  await refreshGallery();
+}
+
+async function exportSelectedAssets() {
+  galleryUI.message.textContent = "正在生成 ZIP…";
+  const response = await fetch("/api/v1/assets/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asset_ids: [...selectedGalleryAssets] }),
+  });
+  if (!response.ok) {
+    galleryUI.message.textContent = await readAPIError(response);
+    return;
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "assets.zip";
+  link.click();
+  URL.revokeObjectURL(url);
+  galleryUI.message.textContent = `已导出 ${selectedGalleryAssets.size} 项。`;
+}
+
+async function importGalleryFiles(files) {
+  if (!files.length) return;
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    galleryUI.message.textContent = `正在导入 ${index + 1}/${files.length}：${file.name}`;
+    const body = new FormData();
+    body.append("file", file);
+    body.append("media_type", file.type || "application/octet-stream");
+    body.append("source", "upload");
+    const response = await fetch("/api/v1/assets", { method: "POST", body });
+    if (!response.ok) {
+      galleryUI.message.textContent = `${file.name} 导入失败：${await readAPIError(response)}`;
+      return;
+    }
+  }
+  galleryUI.fileInput.value = "";
+  await refreshGallery();
+}
+
+function openGalleryPreview(item) {
+  previewAssetID = item.id;
+  document.querySelector("#gallery-preview-title").textContent = item.display_name;
+  document.querySelector("#gallery-preview-name").value = item.display_name;
+  document.querySelector("#gallery-preview-state").value = item.state === "active" ? "精选" : "归档";
+  document.querySelector("#gallery-preview-notes").value = item.notes || "";
+  document.querySelector("#gallery-preview-error").textContent = "";
+  document.querySelector("#gallery-preview-download").href = assetContentURL(item.id);
+  document.querySelector("#gallery-preview-media").replaceChildren(createAssetMedia(item));
+  const facts = document.querySelector("#gallery-preview-facts");
+  facts.replaceChildren();
+  for (const [label, value] of [["类型", item.media_type], ["大小", formatBytes(item.size)], ["尺寸", item.width && item.height ? `${item.width} × ${item.height}` : "—"], ["来源", item.source || "—"]]) {
+    const group = document.createElement("div");
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    group.append(term, description);
+    facts.append(group);
+  }
+  const references = document.querySelector("#gallery-preview-references");
+  references.replaceChildren();
+  if (!item.references?.length) {
+    references.textContent = "没有模块引用。";
+  } else {
+    for (const reference of item.references) {
+      const entry = document.createElement("code");
+      entry.textContent = `${reference.module}:${reference.record_id}`;
+      references.append(entry);
+    }
+  }
+  galleryPreview.showModal();
+}
+
+async function saveGalleryPreview(event) {
+  event.preventDefault();
+  const response = await fetch(`/api/v1/assets/${encodeURIComponent(previewAssetID)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: document.querySelector("#gallery-preview-name").value.trim(), notes: document.querySelector("#gallery-preview-notes").value }),
+  });
+  if (!response.ok) {
+    document.querySelector("#gallery-preview-error").textContent = await readAPIError(response);
+    return;
+  }
+  galleryPreview.close();
+  await refreshGallery();
+}
+
+async function deletePreviewAsset() {
+  const item = galleryAssets.find((candidate) => candidate.id === previewAssetID);
+  if (!item || !window.confirm(`删除资产“${item.display_name}”？`)) return;
+  const response = await fetch(`/api/v1/assets/${encodeURIComponent(previewAssetID)}`, { method: "DELETE" });
+  if (!response.ok) {
+    const references = item.references?.map((entry) => `${entry.module}:${entry.record_id}`).join("、");
+    document.querySelector("#gallery-preview-error").textContent = `${await readAPIError(response)}${references ? `；当前引用：${references}` : ""}`;
+    return;
+  }
+  galleryPreview.close();
+  selectedGalleryAssets.delete(previewAssetID);
+  await refreshGallery();
+}
+
+async function openAssetPicker(options = {}) {
+  if (pickerResolve) closeAssetPicker(null);
+  pickerAllowsMultiple = options.multiple !== false;
+  selectedPickerAssets = new Set(options.selected ?? []);
+  document.querySelector("#asset-picker-search").value = "";
+  document.querySelector("#asset-picker-message").textContent = "正在读取精选资产…";
+  assetPicker.showModal();
+  const result = new Promise((resolve) => { pickerResolve = resolve; });
+  try {
+    const response = await fetch("/api/v1/assets?state=active");
+    if (!response.ok) throw new Error(await readAPIError(response));
+    pickerAssets = (await response.json()).assets ?? [];
+    renderAssetPicker();
+  } catch (error) {
+    document.querySelector("#asset-picker-message").textContent = `读取失败：${error.message}`;
+  }
+  return result;
+}
+
+function renderAssetPicker() {
+  const grid = document.querySelector("#asset-picker-grid");
+  const query = document.querySelector("#asset-picker-search").value.trim().toLocaleLowerCase();
+  const visible = pickerAssets.filter((item) => !query || `${item.display_name}\n${item.notes || ""}`.toLocaleLowerCase().includes(query));
+  grid.replaceChildren();
+  document.querySelector("#asset-picker-message").textContent = visible.length ? `已选 ${selectedPickerAssets.size} 项` : "没有可选的精选资产。";
+  for (const item of visible) {
+    grid.append(createAssetCard(item, selectedPickerAssets.has(item.id), (assetItem, checked) => {
+      if (!pickerAllowsMultiple) selectedPickerAssets.clear();
+      if (checked) selectedPickerAssets.add(assetItem.id);
+      else selectedPickerAssets.delete(assetItem.id);
+      renderAssetPicker();
+    }));
+  }
+}
+
+function closeAssetPicker(result) {
+  if (assetPicker.open) assetPicker.close();
+  const resolve = pickerResolve;
+  pickerResolve = null;
+  if (resolve) resolve(result);
+}
+
+window.openAssetPicker = openAssetPicker;
+
+document.querySelector("#gallery-refresh").addEventListener("click", refreshGallery);
+galleryUI.filter.addEventListener("change", refreshGallery);
+galleryUI.search.addEventListener("input", () => {
+  window.clearTimeout(gallerySearchTimer);
+  gallerySearchTimer = window.setTimeout(refreshGallery, 180);
+});
+galleryUI.fileInput.addEventListener("change", () => importGalleryFiles([...galleryUI.fileInput.files]));
+galleryUI.selectAll.addEventListener("change", () => {
+  selectedGalleryAssets = galleryUI.selectAll.checked ? new Set(galleryAssets.map((item) => item.id)) : new Set();
+  renderGallery();
+});
+galleryUI.activate.addEventListener("click", () => setSelectedAssetState("active"));
+galleryUI.archive.addEventListener("click", () => setSelectedAssetState("archive"));
+galleryUI.export.addEventListener("click", exportSelectedAssets);
+document.querySelector("#gallery-preview-form").addEventListener("submit", saveGalleryPreview);
+document.querySelector("#gallery-preview-close").addEventListener("click", () => galleryPreview.close());
+document.querySelector("#gallery-preview-delete").addEventListener("click", deletePreviewAsset);
+document.querySelector("#asset-picker-search").addEventListener("input", renderAssetPicker);
+document.querySelector("#asset-picker-close").addEventListener("click", () => closeAssetPicker(null));
+document.querySelector("#asset-picker-cancel").addEventListener("click", () => closeAssetPicker(null));
+document.querySelector("#asset-picker-confirm").addEventListener("click", () => closeAssetPicker(pickerAssets.filter((item) => selectedPickerAssets.has(item.id))));
+assetPicker.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeAssetPicker(null);
+});
 
 document.querySelector("#backend-new").addEventListener("click", () => openBackendEditor());
 document.querySelector("#backend-refresh").addEventListener("click", refreshBackends);

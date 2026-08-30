@@ -110,17 +110,17 @@ git commit -m "feat: expose shared asset API"
 - Modify: `internal/web/static/app.js`
 - Modify: `internal/web/server_test.go`
 
-- [ ] **Step 1: 写 Gallery 页面契约失败测试**
+- [x] **Step 1: 写 Gallery 页面契约失败测试**
 
 验证导入控件、全部/active/archive 筛选、响应式媒体网格、预览层、多选、批量精选切换、ZIP 导出、备注和删除操作挂载点；验证可被后续模块复用的 active Asset 选择器挂载点。
 
-- [ ] **Step 2: 实现并验证 Gallery**
+- [x] **Step 2: 实现并验证 Gallery**
 
 图片使用受控内容 URL；视频使用原生 `<video controls preload="metadata">`；其他附件显示文件信息。删除冲突展示引用明细，不静默失败。选择器始终请求 `GET /api/v1/assets?state=active`，并以原生 Dialog 暴露选择结果。
 
 Run: `go test ./internal/web -v`
 
-- [ ] **Step 3: 提交 Task 3**
+- [x] **Step 3: 提交 Task 3**
 
 ```bash
 git add internal/web/static internal/web/server_test.go

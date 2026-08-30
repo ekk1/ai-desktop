@@ -180,6 +180,45 @@ func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) 
 	}
 }
 
+func TestEmbeddedGalleryExposesAssetWorkflowAndReusablePicker(t *testing.T) {
+	index := getBody(t, "/")
+	for _, id := range []string{
+		`id="gallery-workspace"`,
+		`id="gallery-file-input"`,
+		`id="gallery-filter"`,
+		`id="gallery-search"`,
+		`id="gallery-grid"`,
+		`id="gallery-select-all"`,
+		`id="gallery-activate"`,
+		`id="gallery-archive"`,
+		`id="gallery-export"`,
+		`id="gallery-preview"`,
+		`id="asset-picker"`,
+		`id="asset-picker-grid"`,
+		`id="asset-picker-confirm"`,
+	} {
+		if !strings.Contains(index, id) {
+			t.Errorf("gallery does not contain %s", id)
+		}
+	}
+
+	script := getBody(t, "/assets/app.js")
+	for _, behavior := range []string{
+		`/api/v1/assets?state=active`,
+		`/api/v1/assets/state`,
+		`/api/v1/assets/export`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("gallery script does not use %s", behavior)
+		}
+	}
+
+	styles := getBody(t, "/assets/styles.css")
+	if !strings.Contains(styles, ".asset-grid") {
+		t.Error("gallery styles do not define the responsive asset grid")
+	}
+}
+
 func getBody(t *testing.T, path string) string {
 	t.Helper()
 	recorder := httptest.NewRecorder()
