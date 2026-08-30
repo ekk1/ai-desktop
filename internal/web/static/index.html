@@ -3,14 +3,90 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>本地 AI 工作台</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <main>
-    <h1>本地 AI 工作台</h1>
-    <p id="connection-status">正在连接本地服务…</p>
-  </main>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-row">
+        <button class="sidebar-toggle" type="button" aria-controls="workspace-sidebar" aria-expanded="false">
+          <span aria-hidden="true">☰</span>
+          <span class="sidebar-toggle-label">侧栏</span>
+        </button>
+        <a class="brand" href="#llm" aria-label="本地 AI 工作台首页">AI 工作台</a>
+      </div>
+
+      <nav class="module-nav" aria-label="工作台模块">
+        <button type="button" data-module="llm" aria-current="page">LLM 工作区</button>
+        <button type="button" data-module="images">生图</button>
+        <button type="button" data-module="video">视频</button>
+        <button type="button" data-module="backends">后端管理</button>
+        <button type="button" data-module="gallery">Gallery</button>
+        <button type="button" data-module="knowledge">知识库</button>
+        <button type="button" data-module="settings">配置</button>
+      </nav>
+
+      <div class="connection" id="connection-status" role="status" aria-live="polite">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span>正在连接</span>
+      </div>
+    </header>
+
+    <div class="workspace-layout">
+      <aside id="workspace-sidebar" class="workspace-sidebar" aria-label="当前模块导航">
+        <div class="sidebar-heading">
+          <div>
+            <p class="eyebrow">当前模块</p>
+            <h2 id="sidebar-title">LLM 工作区</h2>
+          </div>
+          <button class="sidebar-close" type="button">关闭</button>
+        </div>
+        <label class="search-field">
+          <span>搜索</span>
+          <input id="sidebar-search" type="search" placeholder="搜索将在对应阶段启用" disabled>
+        </label>
+        <div class="sidebar-placeholder" id="sidebar-content">
+          <p>这里将显示文件夹和会话。</p>
+          <button type="button" disabled>新建会话</button>
+        </div>
+      </aside>
+
+      <button class="sidebar-scrim" type="button" tabindex="-1" aria-label="关闭侧栏"></button>
+
+      <main class="workspace-main" id="main-content" tabindex="-1">
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">本地优先 · 完整请求</p>
+            <h1 id="page-title">LLM 工作区</h1>
+            <p id="page-description">组装 Panel、模板、知识和资产，向选定模型发送一次完整请求。</p>
+          </div>
+          <span class="phase-badge">基础骨架</span>
+        </header>
+
+        <section class="empty-state" aria-labelledby="empty-title">
+          <p class="section-kicker">阶段 1</p>
+          <h2 id="empty-title">工作台已经就绪</h2>
+          <p id="empty-description">当前版本建立了可靠的数据目录、版本化 API 和响应式界面。具体工作流将在后续阶段逐步接入。</p>
+          <dl class="runtime-facts">
+            <div>
+              <dt>版本</dt>
+              <dd id="runtime-version">读取中</dd>
+            </div>
+            <div>
+              <dt>监听端口</dt>
+              <dd id="runtime-port">读取中</dd>
+            </div>
+            <div>
+              <dt>数据目录</dt>
+              <dd id="runtime-data-dir">读取中</dd>
+            </div>
+          </dl>
+        </section>
+      </main>
+    </div>
+  </div>
   <script type="module" src="/assets/app.js"></script>
 </body>
 </html>

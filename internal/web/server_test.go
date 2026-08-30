@@ -126,3 +126,40 @@ func TestEmbeddedFilesAreServedAtExplicitPaths(t *testing.T) {
 		t.Fatalf("unknown browser path status = %d, want 404", recorder.Code)
 	}
 }
+
+func TestEmbeddedWorkbenchShellExposesModulesAndResponsiveControls(t *testing.T) {
+	index := getBody(t, "/")
+	for _, module := range []string{"llm", "images", "video", "backends", "gallery", "knowledge", "settings"} {
+		want := `data-module="` + module + `"`
+		if !strings.Contains(index, want) {
+			t.Errorf("index does not expose %s", want)
+		}
+	}
+	for _, want := range []string{`aria-controls="workspace-sidebar"`, `id="workspace-sidebar"`, `id="page-title"`} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index does not contain %s", want)
+		}
+	}
+
+	styles := getBody(t, "/assets/styles.css")
+	if !strings.Contains(styles, "@media (max-width: 760px)") {
+		t.Error("styles do not define the narrow-screen layout")
+	}
+
+	script := getBody(t, "/assets/app.js")
+	for _, endpoint := range []string{`fetch("/api/v1/health")`, `fetch("/api/v1/settings")`} {
+		if !strings.Contains(script, endpoint) {
+			t.Errorf("app script does not request %s", endpoint)
+		}
+	}
+}
+
+func getBody(t *testing.T, path string) string {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	testHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", path, recorder.Code)
+	}
+	return recorder.Body.String()
+}
