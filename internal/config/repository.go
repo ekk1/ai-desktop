@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/ekk1/ai-desktop/internal/provider"
+	"github.com/ekk1/ai-desktop/internal/sdcpp"
 )
 
 type Repository struct {
@@ -37,6 +38,23 @@ func (repository *Repository) UpdateLLM(llm provider.LLMConfig) (Config, error) 
 	defer repository.mu.Unlock()
 	candidate := repository.config.Clone()
 	candidate.LLM = candidateLLM
+	if err := Save(repository.path, candidate); err != nil {
+		return Config{}, err
+	}
+	repository.config = candidate
+	return candidate.Clone(), nil
+}
+
+func (repository *Repository) UpdateImages(images sdcpp.ImageConfig) (Config, error) {
+	candidateImages := images.Clone()
+	if err := candidateImages.Validate(); err != nil {
+		return Config{}, fmt.Errorf("validate image config: %w", err)
+	}
+
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	candidate := repository.config.Clone()
+	candidate.Images = candidateImages
 	if err := Save(repository.path, candidate); err != nil {
 		return Config{}, err
 	}

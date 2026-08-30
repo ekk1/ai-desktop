@@ -38,7 +38,7 @@
 - Changes: `config.CurrentSchemaVersion` from 2 to 3 and adds `Config.Images sdcpp.ImageConfig`
 - Produces: `(*config.Repository).UpdateImages(sdcpp.ImageConfig) (config.Config,error)`
 
-- [ ] **Step 1: Write failing Provider config tests**
+- [x] **Step 1: Write failing Provider config tests**
 
 ```go
 func TestDefaultImageConfigContainsRunnableLocalProvider(t *testing.T) {
@@ -60,13 +60,13 @@ func TestImageConfigRejectsInvalidLimitsAndHeaderInjection(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run sdcpp config tests and verify RED**
+- [x] **Step 2: Run sdcpp config tests and verify RED**
 
 Run: `go test ./internal/sdcpp -run 'Test(DefaultImage|ImageConfig)' -count=1 -v`
 
 Expected: FAIL because `internal/sdcpp` does not exist.
 
-- [ ] **Step 3: Implement exact config model and validation**
+- [x] **Step 3: Implement exact config model and validation**
 
 ```go
 type ImageProvider struct {
@@ -84,7 +84,7 @@ Require unique safe IDs, non-empty names, absolute HTTP(S) BaseURL without query
 
 `DefaultImageParams()` returns `{"width":1024,"height":1024,"seed":-1,"batch_count":1,"output_format":"png"}` as a fresh `json.RawMessage` copy. Service/API use it only when a new Batch omits BaseParams; existing empty Objects stay empty.
 
-- [ ] **Step 4: Write failing Schema 2 migration and repository tests**
+- [x] **Step 4: Write failing Schema 2 migration and repository tests**
 
 ```go
 func TestLoadMigratesSchemaTwoWithImageDefaults(t *testing.T) {
@@ -111,15 +111,15 @@ func TestRepositoryUpdateImagesPersistsDeepCopy(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Run migration/repository tests and verify RED**
+- [x] **Step 5: Run migration/repository tests and verify RED**
 
 Run: `go test ./internal/config -run 'Test(LoadMigratesSchemaTwo|RepositoryUpdateImages)' -count=1 -v`
 
-- [ ] **Step 6: Implement Schema 3 and image config repository updates**
+- [x] **Step 6: Implement Schema 3 and image config repository updates**
 
 Migration 2→3 assigns `sdcpp.DefaultImageConfig()` while preserving every existing field. `Config.Clone` deep-clones Images; `Validate` delegates to `Images.Validate`. `UpdateImages` validates a cloned value while holding the existing repository mutex and writes through `config.Save`.
 
-- [ ] **Step 7: Verify and commit Task 1**
+- [x] **Step 7: Verify and commit Task 1**
 
 Run: `gofmt -w internal/sdcpp internal/config && go test ./internal/sdcpp ./internal/config -count=1 && git diff --check`
 

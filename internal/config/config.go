@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/ekk1/ai-desktop/internal/provider"
+	"github.com/ekk1/ai-desktop/internal/sdcpp"
 	"github.com/ekk1/ai-desktop/internal/store"
 )
 
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 const (
 	defaultListenPort                   = 8188
@@ -26,6 +27,7 @@ type Config struct {
 	ShutdownTimeoutSeconds int                `json:"shutdown_timeout_seconds"`
 	MaxUploadBytes         int64              `json:"max_upload_bytes"`
 	LLM                    provider.LLMConfig `json:"llm"`
+	Images                 sdcpp.ImageConfig  `json:"images"`
 }
 
 func Default() Config {
@@ -35,12 +37,14 @@ func Default() Config {
 		ShutdownTimeoutSeconds: defaultShutdownTimeoutSeconds,
 		MaxUploadBytes:         defaultMaxUploadBytes,
 		LLM:                    provider.DefaultLLMConfig(),
+		Images:                 sdcpp.DefaultImageConfig(),
 	}
 }
 
 func (cfg Config) Clone() Config {
 	clone := cfg
 	clone.LLM = cfg.LLM.Clone()
+	clone.Images = cfg.Images.Clone()
 	return clone
 }
 
@@ -122,6 +126,9 @@ func (cfg Config) Validate() error {
 	if err := cfg.LLM.Validate(); err != nil {
 		return fmt.Errorf("llm: %w", err)
 	}
+	if err := cfg.Images.Validate(); err != nil {
+		return fmt.Errorf("images: %w", err)
+	}
 	return nil
 }
 
@@ -131,6 +138,9 @@ func migrate(cfg Config) (Config, error) {
 		case 1:
 			cfg.SchemaVersion = 2
 			cfg.LLM = provider.DefaultLLMConfig()
+		case 2:
+			cfg.SchemaVersion = 3
+			cfg.Images = sdcpp.DefaultImageConfig()
 		default:
 			return Config{}, fmt.Errorf("no migration path from config schema version %d", cfg.SchemaVersion)
 		}

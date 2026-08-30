@@ -63,3 +63,48 @@ func TestRepositoryRejectsInvalidLLMWithoutChangingState(t *testing.T) {
 		t.Fatalf("provider reference changed to %q", got)
 	}
 }
+
+func TestRepositoryUpdateImagesPersistsDeepCopy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	repository, err := OpenRepository(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := repository.Snapshot().Images
+	images.Providers[0].Name = "GPU Image"
+	updated, err := repository.UpdateImages(images)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Images.Providers[0].Name != "GPU Image" {
+		t.Fatalf("updated = %#v", updated.Images)
+	}
+	updated.Images.Providers[0].Headers["X-Late"] = "mutation"
+	images.Providers[0].Headers["X-Input"] = "mutation"
+	if got := repository.Snapshot().Images.Providers[0].Headers; got["X-Late"] != "" || got["X-Input"] != "" {
+		t.Fatalf("repository leaked mutable state: %#v", got)
+	}
+	reopened, err := OpenRepository(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().Images.Providers[0].Name; got != "GPU Image" {
+		t.Fatalf("persisted name = %q", got)
+	}
+}
+
+func TestRepositoryRejectsInvalidImagesWithoutChangingState(t *testing.T) {
+	repository, err := OpenRepository(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := repository.Snapshot()
+	invalid := before.Images.Clone()
+	invalid.Providers[0].PollIntervalMilliseconds = 1
+	if _, err := repository.UpdateImages(invalid); err == nil {
+		t.Fatal("UpdateImages accepted invalid config")
+	}
+	if got := repository.Snapshot().Images.Providers[0].PollIntervalMilliseconds; got != before.Images.Providers[0].PollIntervalMilliseconds {
+		t.Fatalf("poll interval changed to %d", got)
+	}
+}

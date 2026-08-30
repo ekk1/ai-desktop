@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -109,11 +110,14 @@ func TestLoadMigratesSchemaOneAndPreservesRuntimeFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != 2 || got.ListenPort != 9001 || got.ShutdownTimeoutSeconds != 15 || got.MaxUploadBytes != 1048576 {
+	if got.SchemaVersion != 3 || got.ListenPort != 9001 || got.ShutdownTimeoutSeconds != 15 || got.MaxUploadBytes != 1048576 {
 		t.Fatalf("migrated runtime config = %#v", got)
 	}
 	if len(got.LLM.QuickPaths) != 1 || got.LLM.QuickPaths[0].Name != "Local" {
 		t.Fatalf("migrated LLM config = %#v", got.LLM)
+	}
+	if len(got.Images.Providers) != 1 || got.Images.Providers[0].ID != "sdcpp-local" {
+		t.Fatalf("migrated image config = %#v", got.Images)
 	}
 
 	reloaded, err := Load(path)
@@ -122,5 +126,34 @@ func TestLoadMigratesSchemaOneAndPreservesRuntimeFields(t *testing.T) {
 	}
 	if !reflect.DeepEqual(reloaded, got) {
 		t.Fatalf("persisted config = %#v, want %#v", reloaded, got)
+	}
+}
+
+func TestLoadMigratesSchemaTwoWithImageDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	contents, err := json.Marshal(Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old map[string]any
+	if err := json.Unmarshal(contents, &old); err != nil {
+		t.Fatal(err)
+	}
+	old["schema_version"] = float64(2)
+	delete(old, "images")
+	contents, err = json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 3 || len(got.Images.Providers) != 1 || got.Images.Providers[0].ID != "sdcpp-local" {
+		t.Fatalf("migrated config = %#v", got)
 	}
 }
