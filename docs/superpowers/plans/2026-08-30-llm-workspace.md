@@ -152,7 +152,7 @@ git commit -m "feat: add runtime LLM configuration"
 - Produces: `CreatePanel(string,CreatePanelInput) (Panel,error)`, `UpdatePanel(string,string,UpdatePanelInput) (Panel,error)`, `DeletePanel(string,string) error`, `RestoreRevision(string,string,string) (Panel,error)`, `ForkSession(string,ForkSessionInput) (Workspace,error)`, `PathTo(string,string) ([]Panel,error)`
 - Produces internal rollback primitive: `restoreWorkspace(Workspace) error`
 
-- [ ] **Step 1: Write failing tree/path/branch tests**
+- [x] **Step 1: Write failing tree/path/branch tests**
 
 ```go
 func TestRepositoryBuildsCurrentPathAndStableSiblingBranches(t *testing.T) {
@@ -174,15 +174,15 @@ func TestRepositoryBuildsCurrentPathAndStableSiblingBranches(t *testing.T) {
 
 Add separate tests for missing parents, cycles being impossible through create-only ParentID, cross-session IDs, and root deletion rejection.
 
-- [ ] **Step 2: Run tree tests and verify RED**
+- [x] **Step 2: Run tree tests and verify RED**
 
 Run: `go test ./internal/session -run 'TestRepository(Builds|Rejects)' -count=1 -v`
 
-- [ ] **Step 3: Implement model and one-file-per-workspace Repository**
+- [x] **Step 3: Implement model and one-file-per-workspace Repository**
 
 Use `<root>/<session-id>/workspace.json`, schema 1, program-generated 32-hex IDs, directory scanning on open, deep copies, and stable sorting. `CreateSession` creates an included empty root Panel and makes it current.
 
-- [ ] **Step 4: Write failing revision/delete/fork/persistence tests**
+- [x] **Step 4: Write failing revision/delete/fork/persistence tests**
 
 ```go
 func TestUpdateCreatesRestorableRevision(t *testing.T) {
@@ -216,11 +216,11 @@ func TestForkSessionCopiesOnlyRootToChosenNodeWithFreshIDs(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Implement revisions, subtree deletion and fork**
+- [x] **Step 5: Implement revisions, subtree deletion and fork**
 
 Content updates snapshot title/content/included/knowledge IDs/asset IDs before replacement. Collapse/current selection updates do not create Revision. Fork remaps ParentIDs in path order and resets Result metadata.
 
-- [ ] **Step 6: Verify and commit Task 2**
+- [x] **Step 6: Verify and commit Task 2**
 
 Run: `gofmt -w internal/session && go test ./internal/session -count=1 -v`
 
