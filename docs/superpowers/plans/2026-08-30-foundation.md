@@ -437,7 +437,7 @@ git add docs/superpowers/plans/2026-08-30-foundation.md
 git commit -m "docs: record foundation delivery"
 ```
 
-- [ ] **Step 4: 推送主分支**
+- [x] **Step 4: 推送主分支**
 
 Run: `git push origin main`
 
