@@ -660,31 +660,31 @@ git commit -m "feat: configure LLM providers in browser"
 - Consumes: Session/Panel/Run/Exa APIs, Knowledge API, `window.openAssetPicker`
 - Produces: responsive LLM session sidebar, current-path Panel editor, branch selector, templates/references, QuickPath execution bar and live Run cards
 
-- [ ] **Step 1: Write failing LLM workspace contract test**
+- [x] **Step 1: Write failing LLM workspace contract test**
 
 Assert served markup exposes session search/new/list, editable title/folder, derive-session action, current path, Panel title/content/included/collapse/new-child/delete/revisions, knowledge/Asset selectors, branch chooser, QuickPath bar, Run status/cancel, Exa action and technical details mount points.
 
-- [ ] **Step 2: Run contract test and verify RED**
+- [x] **Step 2: Run contract test and verify RED**
 
 Run: `go test ./internal/web -run TestEmbeddedLLMWorkspace -count=1 -v`
 
-- [ ] **Step 3: Implement module lifecycle without enlarging app.js domain logic**
+- [x] **Step 3: Implement module lifecycle without enlarging app.js domain logic**
 
 Export `createLLMWorkspace({sidebarContent,sidebarSearch,readAPIError,openAssetPicker})` with `enter()` and `leave()`. `app.js` only imports it and calls lifecycle hooks from `selectModule`; all LLM state/render/fetch/SSE logic stays in `llm.js`.
 
-- [ ] **Step 4: Implement current-path and branch editing**
+- [x] **Step 4: Implement current-path and branch editing**
 
 Render only API `current_path`; branch buttons change selected Panel through Session update. Save title/folder and Panel edits explicitly. Knowledge selector loads memo list; Asset selector calls active-only picker. Template insertion never executes. Revision and run snapshot details stay collapsed.
 
-- [ ] **Step 5: Implement multi-QuickPath streaming and Exa confirmation**
+- [x] **Step 5: Implement multi-QuickPath streaming and Exa confirmation**
 
 Selected QuickPaths POST one execute request; open one EventSource per Run; append chunks with `textContent`, close on terminal state, refresh Workspace to reveal sibling results. Show Exa button only from server detection metadata and require click; never parse-and-send automatically in browser.
 
-- [ ] **Step 6: Implement responsive styling and keyboard-safe Dialogs**
+- [x] **Step 6: Implement responsive styling and keyboard-safe Dialogs**
 
 Desktop uses existing left sidebar plus wide Panel column; ≤760px uses the sidebar drawer, single Panel column, wrapping execution bar and near-full-screen dialogs. Every drag-capable ordering operation also has up/down text buttons.
 
-- [ ] **Step 7: Verify and commit Task 10**
+- [x] **Step 7: Verify and commit Task 10**
 
 Run: `go test ./internal/web ./internal/app -count=1 && git diff --check`
 

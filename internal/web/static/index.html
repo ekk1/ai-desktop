@@ -45,11 +45,17 @@
         </div>
         <label class="search-field">
           <span>搜索</span>
-          <input id="sidebar-search" type="search" placeholder="搜索将在对应阶段启用" disabled>
+          <input id="sidebar-search" type="search" placeholder="搜索会话标题或文件夹">
         </label>
         <div class="sidebar-placeholder" id="sidebar-content">
-          <p>这里将显示文件夹和会话。</p>
-          <button type="button" disabled>新建会话</button>
+          <div id="llm-sidebar-controls">
+            <label class="sidebar-filter">文件夹
+              <select id="llm-session-folder-filter"><option value="">全部文件夹</option></select>
+            </label>
+            <button type="button" class="primary-button" id="llm-session-new">新建会话</button>
+            <p class="inline-message" id="llm-session-list-status">正在读取会话…</p>
+            <div class="llm-session-list" id="llm-session-list"></div>
+          </div>
         </div>
       </aside>
 
@@ -84,6 +90,61 @@
             </div>
           </dl>
         </section>
+
+        <section class="llm-workspace" id="llm-workspace" hidden>
+          <form class="llm-session-toolbar" id="llm-session-form">
+            <div class="llm-session-fields">
+              <label>标题 <input id="llm-session-title" required placeholder="自行输入会话标题"></label>
+              <label>文件夹 <input id="llm-session-folder" placeholder="例如 research/local"></label>
+            </div>
+            <div class="button-row">
+              <button type="button" class="secondary-button" id="llm-session-fork">从当前节点派生</button>
+              <button type="submit" class="primary-button" id="llm-session-save">保存标题与文件夹</button>
+            </div>
+          </form>
+          <p class="inline-message" id="llm-workspace-status" aria-live="polite">选择或新建会话。</p>
+          <nav class="llm-branch-chooser" id="llm-branch-chooser" aria-label="Panel 分支"></nav>
+          <div class="llm-current-path" id="llm-current-path"></div>
+          <section class="llm-execution-bar" aria-labelledby="llm-execution-title">
+            <div><p class="eyebrow">完整请求</p><h3 id="llm-execution-title">发送到 Quick Path</h3></div>
+            <div class="llm-quick-path-bar" id="llm-quick-path-bar"></div>
+            <button type="button" class="primary-button" id="llm-execute-selected">发送已选路径</button>
+          </section>
+          <div class="llm-run-list" id="llm-run-list" aria-live="polite"></div>
+        </section>
+
+        <template id="llm-panel-template">
+          <article class="llm-panel-card">
+            <header class="llm-panel-heading">
+              <label class="llm-panel-title">Panel 标题 <input data-panel-field="title"></label>
+              <label class="checkbox-field"><input type="checkbox" data-panel-field="included"> 加入完整请求</label>
+              <button type="button" class="text-button" data-panel-action="collapse">折叠</button>
+            </header>
+            <div class="llm-panel-body">
+              <label>正文 <textarea rows="10" data-panel-field="content"></textarea></label>
+              <div class="llm-panel-actions">
+                <button type="button" class="primary-button" data-panel-action="save">保存 Panel</button>
+                <button type="button" class="secondary-button" data-panel-action="new-child">新增子 Panel</button>
+                <button type="button" class="secondary-button" data-panel-action="fork">从此处派生会话</button>
+                <button type="button" class="secondary-button" data-panel-action="knowledge">选择知识</button>
+                <button type="button" class="secondary-button" data-panel-action="assets">选择 Asset</button>
+                <button type="button" class="secondary-button" data-panel-action="exa" hidden>执行 Exa</button>
+                <button type="button" class="text-button danger-text" data-panel-action="delete">删除子树</button>
+              </div>
+              <div class="llm-panel-reference-summary"></div>
+              <label class="llm-template-insert">插入模板 <select data-panel-field="template"><option value="">选择模板</option></select></label>
+              <details data-panel-details="revisions"><summary>修订记录</summary><div class="llm-revision-list"></div></details>
+              <details data-panel-details="technical"><summary>结果与技术信息</summary><pre class="llm-panel-technical"></pre></details>
+            </div>
+          </article>
+        </template>
+        <template id="llm-run-template">
+          <article class="llm-run-card">
+            <header><strong class="llm-run-name"></strong><span class="state-pill llm-run-state"></span><button type="button" class="text-button" data-run-action="cancel">取消</button></header>
+            <pre class="llm-run-output"></pre>
+            <details><summary>请求快照与错误</summary><pre class="llm-run-technical"></pre></details>
+          </article>
+        </template>
 
         <section class="backend-workspace" id="backend-workspace" hidden>
           <div class="backend-toolbar">
@@ -464,6 +525,31 @@
       </div>
       <p class="form-error" id="llm-template-error" role="alert"></p>
       <footer class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="llm-template-editor">取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
+    </form>
+  </dialog>
+  <dialog id="llm-session-dialog" class="editor-dialog compact-dialog">
+    <form id="llm-session-dialog-form">
+      <header class="dialog-heading"><div><p class="eyebrow">会话</p><h2 id="llm-session-dialog-title">新建会话</h2></div><button type="button" class="text-button" data-llm-dialog-close="llm-session-dialog">关闭</button></header>
+      <div class="form-grid"><label>标题 <input id="llm-session-dialog-name" required></label><label>文件夹 <input id="llm-session-dialog-folder"></label></div>
+      <input id="llm-session-dialog-mode" type="hidden"><input id="llm-session-dialog-panel" type="hidden">
+      <p class="form-error" id="llm-session-dialog-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-llm-dialog-close="llm-session-dialog">取消</button><button type="submit" class="primary-button">保存</button></footer>
+    </form>
+  </dialog>
+  <dialog id="llm-panel-dialog" class="editor-dialog compact-dialog">
+    <form id="llm-panel-dialog-form">
+      <header class="dialog-heading"><div><p class="eyebrow">分支</p><h2>新增子 Panel</h2></div><button type="button" class="text-button" data-llm-dialog-close="llm-panel-dialog">关闭</button></header>
+      <input id="llm-panel-parent" type="hidden">
+      <div class="form-grid"><label class="full-width">标题 <input id="llm-new-panel-title"></label><label class="full-width">正文 <textarea id="llm-new-panel-content" rows="10"></textarea></label></div>
+      <p class="form-error" id="llm-panel-dialog-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-llm-dialog-close="llm-panel-dialog">取消</button><button type="submit" class="primary-button">创建</button></footer>
+    </form>
+  </dialog>
+  <dialog id="llm-knowledge-picker" class="editor-dialog reference-picker-dialog">
+    <form id="llm-knowledge-picker-form">
+      <header class="dialog-heading"><div><p class="eyebrow">上下文引用</p><h2>选择知识条目</h2></div><button type="button" class="text-button" data-llm-dialog-close="llm-knowledge-picker">关闭</button></header>
+      <input id="llm-knowledge-panel" type="hidden"><div class="llm-knowledge-options" id="llm-knowledge-options"></div>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-llm-dialog-close="llm-knowledge-picker">取消</button><button type="submit" class="primary-button">应用到 Panel 草稿</button></footer>
     </form>
   </dialog>
   <script type="module" src="/assets/app.js"></script>

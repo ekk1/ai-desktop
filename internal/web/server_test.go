@@ -186,6 +186,66 @@ func TestEmbeddedLLMConfigExposesProgressiveProviderEditors(t *testing.T) {
 	}
 }
 
+func TestEmbeddedLLMWorkspaceExposesBranchingPanelControls(t *testing.T) {
+	index := getBody(t, "/")
+	for _, marker := range []string{
+		`id="llm-workspace"`,
+		`id="llm-session-new"`,
+		`id="llm-session-folder-filter"`,
+		`id="llm-session-list"`,
+		`id="llm-session-title"`,
+		`id="llm-session-folder"`,
+		`id="llm-session-save"`,
+		`id="llm-session-fork"`,
+		`id="llm-current-path"`,
+		`id="llm-branch-chooser"`,
+		`data-panel-field="title"`,
+		`data-panel-field="content"`,
+		`data-panel-field="included"`,
+		`data-panel-action="collapse"`,
+		`data-panel-action="new-child"`,
+		`data-panel-action="fork"`,
+		`data-panel-action="delete"`,
+		`data-panel-action="knowledge"`,
+		`data-panel-action="assets"`,
+		`data-panel-action="exa"`,
+		`data-panel-details="revisions"`,
+		`data-panel-details="technical"`,
+		`id="llm-quick-path-bar"`,
+		`id="llm-run-list"`,
+		`data-run-action="cancel"`,
+	} {
+		if !strings.Contains(index, marker) {
+			t.Errorf("LLM workspace does not contain %s", marker)
+		}
+	}
+	script := getBody(t, "/assets/llm.js")
+	for _, behavior := range []string{
+		`export function createLLMWorkspace`,
+		`/api/v1/llm/sessions`,
+		`/execute`,
+		`new EventSource`,
+		`/exa`,
+		`openAssetPicker`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("LLM workspace script does not contain %s", behavior)
+		}
+	}
+	styles := getBody(t, "/assets/styles.css")
+	for _, marker := range []string{
+		`.llm-session-item`,
+		`.llm-panel-card`,
+		`.llm-execution-bar`,
+		`.llm-run-card`,
+		`.reference-picker-dialog`,
+	} {
+		if !strings.Contains(styles, marker) {
+			t.Errorf("LLM workspace styles do not contain %s", marker)
+		}
+	}
+}
+
 func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) {
 	index := getBody(t, "/")
 	for _, id := range []string{
