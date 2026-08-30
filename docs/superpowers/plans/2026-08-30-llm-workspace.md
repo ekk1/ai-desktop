@@ -703,11 +703,11 @@ git commit -m "feat: add branching LLM workspace"
 **Interfaces:**
 - Produces: 用户运行说明、Provider/模板变量说明、数据路径、Exa 手动执行说明和完成状态
 
-- [ ] **Step 1: Update README with exact workflows**
+- [x] **Step 1: Update README with exact workflows**
 
 Document `<data-dir>/sessions`, main config secrets, Local preset, custom JSON/SSE extraction paths, SSH-only trust boundary, Panel branching, active Asset selection, manual Exa and interrupted Run behavior.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run: `gofmt -w cmd internal && go vet ./... && go test ./... -count=1`
 
@@ -715,11 +715,11 @@ Run: `go test -race ./internal/config ./internal/session ./internal/provider ./i
 
 Run: `VERIFY_DIR=$(mktemp -d) && go build -o "$VERIFY_DIR/ai-workbench" ./cmd/ai-workbench && git diff --check`
 
-- [ ] **Step 3: Run binary HTTP smoke test**
+- [x] **Step 3: Run binary HTTP smoke test**
 
 Start the built binary on an unused loopback port with a temporary data dir. Use `curl` to create a Session, read default Local config, load the LLM workspace asset, and verify shutdown leaves no active managed Run.
 
-- [ ] **Step 4: Review diff and close documentation**
+- [x] **Step 4: Review diff and close documentation**
 
 Check requirements line by line, update this plan and the master design to completed, then commit:
 

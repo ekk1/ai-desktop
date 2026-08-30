@@ -2,7 +2,7 @@
 
 **日期：** 2026-08-30
 
-**状态：** 已批准；阶段 1–3 已交付，阶段 4 实施中
+**状态：** 已批准；阶段 1–4 已交付
 
 **运行环境：** Linux 单用户服务，通过 SSH 隧道访问
 
@@ -55,9 +55,9 @@ data/
 │   └── crash-logs/
 ├── sessions/
 │   └── <session-id>/
-│       ├── session.json
-│       ├── panels.json
+│       ├── workspace.json
 │       └── runs/
+│           └── <run-id>.json
 ├── knowledge/
 ├── images/
 │   └── batches/
@@ -280,7 +280,7 @@ LLM 工作区 | 生图 | 视频 | 后端管理 | Gallery | 知识库 | 配置
 
 具体 Provider Schema 始终允许在配置中覆盖，内置默认值跟随 llama.cpp 与 stable-diffusion.cpp 官方 HTTP 协议。Server 启动命令和模型专用 CLI 参数不进入工作台硬编码逻辑。
 
-当前进度：基础骨架、后端管理和共享内容已交付；LLM 工作区按 `docs/superpowers/specs/2026-08-30-llm-workspace-design.md` 实施。生图和视频尚未开始。
+当前进度：基础骨架、后端管理、共享内容和 LLM 完整请求工作区已交付；生图和视频尚未开始。
 
 ## 15. 明确不做的内容
 

@@ -2,7 +2,7 @@
 
 一个面向 Linux 本地 AI 工作流的单体 Web 工作台。后端仅使用 Go 标准库，前端仅使用原生 HTML、CSS 和 JavaScript，最终构建为一个内嵌页面资源的二进制。
 
-当前已完成基础骨架、后端管理、共享资产和知识备忘录：
+当前已完成基础骨架、后端管理、共享资产、知识备忘录和 LLM 完整请求工作区：
 
 - 固定监听 `127.0.0.1` 的 HTTP Server
 - 可覆盖的数据目录和监听端口
@@ -20,8 +20,14 @@
 - 可供后续模块复用、只展示 active 内容的 Asset Picker
 - 带文件夹、标签、正文和 Asset 引用的知识备忘录
 - 资产引用保护：知识条目仍在引用的文件不能物理删除
+- 无聊天角色语义的会话文件夹、Panel 树、分支选择和修订恢复
+- 从任意 Panel 新建子分支或派生独立会话
+- 可运行时维护的 Provider、QuickPath、Prompt Template 和 Exa 配置
+- llama.cpp `/completion` 本地预设与通用 JSON/SSE HTTP 请求
+- 多 QuickPath 并行执行、不可变快照、SSE 增量、取消和结果 Panel
+- 严格识别、必须由用户确认执行的 Exa JSON 请求
 
-LLM 请求工作区正在按[独立设计](docs/superpowers/specs/2026-08-30-llm-workspace-design.md)实施；图像和视频生成随后按[总体设计](docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md)接入。
+图像和视频生成是后续阶段，将按[总体设计](docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md)分别接入；已交付的 LLM 行为记录在[独立设计](docs/superpowers/specs/2026-08-30-llm-workspace-design.md)中。
 
 ## 要求
 
@@ -57,7 +63,7 @@ go build -ldflags '-X main.version=0.1.0' -o ai-workbench ./cmd/ai-workbench
 
 浏览器访问 `http://127.0.0.1:8188/`。
 
-工作台只监听本机回环地址，并且不提供鉴权。不要通过反向代理直接暴露到公网。
+工作台只监听本机回环地址，并且不提供鉴权、用户隔离或浏览器侧秘密保护。能够访问页面的人可以查看和修改配置中的 API Key，也能执行配置的本地命令。仅通过本机或受信任的 SSH 隧道访问，不要用反向代理直接暴露到公网。
 
 ## SSH 隧道
 
@@ -109,6 +115,54 @@ curl http://127.0.0.1:8188/api/v1/health
 如果命令需要保留 Shell 自己的 `${HOME}` 展开，写成 `$${HOME}`；工作台展开后交给 Bash 的内容就是 `${HOME}`。
 
 就绪检测支持立即就绪、固定等待、HTTP 2xx 和日志正则。日志只保留在配置容量限制的内存缓冲区中：正常停止后不会自动写文件；点击“保存”时写入 `manual-*.log`，异常退出时自动写入 `crash-*.log`。
+
+## LLM 完整请求工作区
+
+打开顶部“LLM 工作区”，在左栏新建会话并自行填写标题、文件夹。会话只是 Panel 树的组织容器，不具有 user、assistant 或 system 对话角色。右侧只显示服务端选定的根到当前节点路径：每个 Panel 可显式保存内容、加入或排除完整请求、折叠、恢复修订、新建子 Panel，或从该节点派生一个只复制当前路径的新会话。分支选择器用于切换同一父节点下的不同后续。
+
+Panel 可从知识库和 Asset Picker 选择引用。Picker 只展示 `active` 精选资产；已经引用后再归档的 Asset 会保留在 Panel 中，直到点击对应“移除”并保存。当前 LLM 组装器只把图片 Asset 编码为 Data URL，普通附件和视频不能加入 LLM 请求。Prompt Template 的“插入”只把纯文本写入当前草稿，不会自动保存或执行。
+
+会话和每次运行保存在：
+
+```text
+<data-dir>/sessions/<session-id>/workspace.json
+<data-dir>/sessions/<session-id>/runs/<run-id>.json
+```
+
+点击一个 QuickPath 的“发送”，或勾选多个 QuickPath 后批量发送，会先持久化各自的不可变请求快照，再并行请求 Provider。增量内容通过工作台 SSE 显示；成功结果在来源 Panel 下创建互为兄弟的普通 Panel。取消或正常关闭会取消活动请求。程序重新启动时，磁盘上遗留的 `queued` 或 `running` Run 会标为 `interrupted`，不会自动重发。
+
+### Provider、QuickPath 与模板
+
+打开顶部“配置”维护 LLM 配置。配置和 API Key 位于 `<data-dir>/config.json`，程序创建时权限为 `0600`；修改保存后影响下一次 Run，不改变已经生成的快照。“添加 llama.cpp 预设”会添加默认 Provider `llama-local` 和 QuickPath `local`，目标为 `POST http://127.0.0.1:8080/completion`，Body 为 `{"prompt":${CONTENT_JSON},"stream":true}`，SSE 增量路径为 `content`，结束路径为 `stop`。如果同 ID 已存在，预设不会覆盖它。
+
+Provider Body Template 必须是单个 JSON Object，变量必须作为完整 JSON 值使用：
+
+- `${CONTENT_JSON}`：已加入请求的 Panel 内容和所选知识拼成的字符串。
+- `${PANELS_JSON}`：已加入请求的 Panel 快照数组。
+- `${KNOWLEDGE_JSON}`：所选知识快照数组。
+- `${ASSET_DATA_URLS_JSON}`：所选图片的 Data URL 数组。
+- `${MODEL_JSON}`：QuickPath 的模型名。
+- `${PARAMS_JSON}`：QuickPath 参数 Object。
+
+QuickPath 的 Params 还会在渲染后合并到请求体顶层；同名字段以 Params 为准。Header 只支持 `${API_KEY}` 变量。密钥和敏感 Header 在 Run 快照中会被清空或替换为 `<redacted>`。
+
+响应模式为 `json` 时，用点分路径从单个 JSON 响应提取字符串，例如 `choices.0.text`。模式为 `sse_json` 时，每条 SSE `data` 必须是 JSON 或 `[DONE]`；“增量路径”提取文本，“结束路径”可指向布尔值。路径只支持 Object 字段和十进制数组索引，不是 JSONPath，也不会执行表达式。连接超时、总超时、响应上限和图片总字节上限都在 Provider 中配置。
+
+### 手动 Exa
+
+在“配置”中填写 Exa API Key。只有当一个 Panel 的全部正文严格等于下列单个 JSON Object，且字段和范围通过服务端校验时，界面才显示“执行 Exa”：
+
+```json
+{
+  "tool": "exa.search",
+  "arguments": {
+    "query": "检索内容",
+    "num_results": 8
+  }
+}
+```
+
+浏览器不会自行解析后自动联网。必须点击按钮并再次确认，工作台 Server 才会发送请求；Exa 原始 JSON 结果会成为来源 Panel 的子 Panel，可继续交给任意 QuickPath 分析。`num_results` 可省略，允许范围为 1–100。
 
 ## 共享资产与 Gallery
 
