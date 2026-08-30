@@ -2,7 +2,7 @@
 
 **日期：** 2026-08-30
 
-**状态：** 已批准，待实施
+**状态：** 已交付（2026-08-31）
 
 **上位设计：** `docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md`
 
@@ -72,7 +72,7 @@
 
 约束：
 
-- ID 稳定且唯一；Base URL 必须是绝对 HTTP(S) URL，存储时去除尾部 `/`。
+- ID 稳定且唯一；Base URL 必须是绝对 HTTP(S) URL，且不能带尾部 `/`、Query 或 Fragment。
 - Header 名和值拒绝 CR/LF；首版没有 Header 模板或隐藏密钥语义，用户可录入固定 Header。
 - 连接超时范围 1–300 秒；Job 总超时范围 1–86400 秒。
 - 轮询间隔范围 100–10000 毫秒；响应和单图限制范围 1 Byte–1 GiB。
@@ -85,9 +85,9 @@
 
 ### 5.1 Batch
 
-Batch 包含 ID、用户标题、文件夹、Provider ID、并发数、BaseParams JSON Object、Items、创建和更新时间。并发数不能超过 Provider 的 `max_concurrent_jobs`。左栏文件夹由 Batch 字段派生，不维护独立索引。
+Batch 包含 ID、用户标题、文件夹、Provider ID、并发数、BaseParams JSON Object、Items、创建和更新时间。Batch 并发范围为 1–16；运行时还受 Provider 的 `max_concurrent_jobs` 约束，实际并发取两者较小值。左栏文件夹由 Batch 字段派生，不维护独立索引。
 
-BaseParams 保存官方原生 `img_gen` 请求的公共参数，但不保存 prompt、negative_prompt 或图像数据。新 Batch 使用精简默认值：宽高 1024、seed -1、batch_count 1、PNG 输出；sampling 等未填写字段保持省略，让当前 Server 默认值生效。用户可点击“读取 capabilities”把当前 Server 的 `defaults_by_mode.img_gen` 明确复制到草稿。
+BaseParams 保存官方原生 `img_gen` 请求的公共参数，但不保存 prompt、negative_prompt 或图像数据。新 Batch 使用精简默认值：宽高 1024、seed -1、batch_count 1、PNG 输出；sampling 等未填写字段保持省略，让当前 Server 默认值生效。读取 capabilities 只补充表单建议，不自动改写当前草稿；完整返回仍可从 API 读取。
 
 ### 5.2 Item
 
@@ -103,9 +103,9 @@ Item 包含 ID、Order、Prompt、NegativePrompt、ParamsOverride JSON Object、
 
 ### 5.3 Attempt
 
-每次首次运行或重试创建新 Attempt，旧 Attempt 永不覆盖。字段包括：
+每次首次运行或重试创建新 Attempt，旧 Attempt 永不覆盖。Attempt 嵌套保存在所属 Item 中，字段包括：
 
-- ID、Item ID 和状态。
+- ID 和状态。
 - ProviderSnapshot、ParamsSnapshot 和 InputAssetSnapshots。
 - RemoteJobID、远端状态和 QueuePosition。
 - ResultAssetIDs、有限错误码/说明、创建/开始/完成时间。
@@ -131,13 +131,11 @@ Item 包含 ID、Order、Prompt、NegativePrompt、ParamsOverride JSON Object、
 
 capabilities 是辅助信息，不是执行前置条件。Server 不可达时，用户仍可编辑和保存批次。
 
-界面读取并使用 mode-aware 字段：
+capabilities API 保留完整 mode-aware 字段。首版界面读取模型摘要以及 sampler、scheduler、输出格式建议，不把 capabilities 当作本地字段白名单，也不自动替换用户参数：
 
-- `supported_modes` 必须包含 `img_gen` 才显示当前模型可执行。
-- `defaults_by_mode.img_gen` 用于显式载入默认参数。
-- `features_by_mode.img_gen` 控制图像引用、LoRA、hires、cache 和取消能力提示。
-- `samplers`、`schedulers`、`loras`、`upscalers` 用于原生 datalist/select 建议，但仍允许手工值。
-- `limits` 用于表单提示和提交前校验宽高、batch_count；Server 仍是最终校验方。
+- `supported_modes` 和 `current_mode` 由 API 原样返回，供诊断当前 Server 模式。
+- `defaults_by_mode.img_gen`、`features_by_mode.img_gen`、`limits`、`loras` 和 `upscalers` 由 API 原样返回，便于后续渐进增强或直接调试。
+- `samplers`、`schedulers` 和 `output_formats` 用于原生 datalist 建议，但仍允许手工值。
 
 默认表单展示 Prompt、Negative Prompt、width、height、seed、batch_count、sample steps、text CFG、sampler、scheduler 和输出格式。init/mask/control/IP Adapter/refs 使用 Asset Picker。LoRA、hires、VAE tiling和其余字段在“完整参数 JSON”折叠区编辑。
 
@@ -153,7 +151,7 @@ capabilities 是辅助信息，不是执行前置条件。Server 不可达时，
 4. 调用 `asset.Repository.Import`，DisplayName 包含 Batch、Item、Attempt 和结果序号，Source 为 `imagegen:<attempt-id>`。
 5. 新 Asset 默认 archive，并添加 `asset.Reference{Module:"image_attempt", RecordID:<attempt-id>}`。
 
-逐张导入允许部分成功。任一结果失败时 Attempt 为 failed，保留已成功的 ResultAssetIDs 和错误说明。用户可在批次结果区把结果切换为 active、打开 Gallery 详情，或明确从 Attempt 移除引用；移除引用不物理删除 Asset。
+逐张导入允许部分成功。任一结果失败时 Attempt 为 failed，保留已成功的 ResultAssetIDs 和错误说明。用户可在批次结果区把结果切换为 active 或 archive，并可在 Gallery 中继续管理；Attempt 对结果的引用随历史保留。
 
 ## 9. 调度、轮询和取消
 
@@ -217,9 +215,9 @@ Worker 流程：
 生图模块复用全局左栏：搜索、文件夹筛选、新建 Batch 和 Batch 列表。右侧由四块组成：
 
 - Batch 工具栏：标题、文件夹、Provider、并发、保存、删除、读取 capabilities。
-- 公共参数卡：常用字段默认展开，完整 BaseParams JSON、capabilities 和技术信息折叠。
+- 公共参数卡：常用字段默认展开，完整 BaseParams JSON 折叠，capabilities 通过显式按钮读取。
 - Item 列表：批量添加提示词、单项编辑、上移/下移、输入 Asset、单项 JSON 覆盖、运行/重试/取消。
-- 结果区：响应式图片网格、Attempt 状态、错误、archive/active 切换和 Gallery 入口。
+- 结果区：响应式图片网格、Attempt 状态、错误和 archive/active 切换。
 
 列表默认只显示 Prompt 摘要、状态和高频按钮；完整请求快照、远端 Job ID、队列位置、历史 Attempt 与技术错误使用 `<details>`。不实现拖拽。所有媒体渲染使用受控 `/api/v1/assets/{id}/content` URL，不把 Base64 放进 DOM。
 

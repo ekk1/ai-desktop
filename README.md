@@ -2,7 +2,7 @@
 
 一个面向 Linux 本地 AI 工作流的单体 Web 工作台。后端仅使用 Go 标准库，前端仅使用原生 HTML、CSS 和 JavaScript，最终构建为一个内嵌页面资源的二进制。
 
-当前已完成基础骨架、后端管理、共享资产、知识备忘录和 LLM 完整请求工作区：
+当前已完成基础骨架、后端管理、共享资产、知识备忘录、LLM 完整请求工作区和生图工作区：
 
 - 固定监听 `127.0.0.1` 的 HTTP Server
 - 可覆盖的数据目录和监听端口
@@ -26,8 +26,12 @@
 - llama.cpp `/completion` 本地预设与通用 JSON/SSE HTTP 请求
 - 多 QuickPath 并行执行、不可变快照、SSE 增量、取消和结果 Panel
 - 严格识别、必须由用户确认执行的 Exa JSON 请求
+- stable-diffusion.cpp 原生异步 Image Provider、capabilities 和运行时配置
+- 带文件夹的生图批次、完整参数 JSON、批量 Prompt 和单项覆盖
+- 有限并发、不可变 Attempt 快照、SSE 状态、取消、重试与中断恢复
+- 五类图片 Asset 输入、结果自动归档和一键精选
 
-图像和视频生成是后续阶段，将按[总体设计](docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md)分别接入；已交付的 LLM 行为记录在[独立设计](docs/superpowers/specs/2026-08-30-llm-workspace-design.md)中。
+视频生成是下一阶段，将按[总体设计](docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md)独立接入。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
 
 ## 要求
 
@@ -163,6 +167,33 @@ QuickPath 的 Params 还会在渲染后合并到请求体顶层；同名字段�
 ```
 
 浏览器不会自行解析后自动联网。必须点击按钮并再次确认，工作台 Server 才会发送请求；Exa 原始 JSON 结果会成为来源 Panel 的子 Panel，可继续交给任意 QuickPath 分析。`num_results` 可省略，允许范围为 1–100。
+
+## 生图工作区
+
+工作台使用 stable-diffusion.cpp 官方原生异步接口：`/sdcpp/v1/capabilities`、`/sdcpp/v1/img_gen` 和 `/sdcpp/v1/jobs/*`。默认 Provider 为 `sdcpp-local`，Base URL 是 `http://127.0.0.1:1234`。可在顶部“配置”中修改 URL、固定 Headers、超时、轮询间隔、响应/图片字节上限、并发数和启用状态；这些设置位于 `<data-dir>/config.json`。
+
+Provider 只定义 HTTP 请求路径，不启动模型 Server。请在“后端管理”中自行配置并启停 `sd-server` 命令、模型和启动参数；切换模型时先停止旧 Profile，再启动目标 Profile。生图界面的“读取 capabilities”只读取当前模型并补充 sampler、scheduler 和输出格式建议，不会覆盖未保存参数，Server 不可达也不影响编辑批次。
+
+打开顶部“生图”后，可按文件夹管理 Batch。每个 Batch 显式选择 Provider、局部并发数和公共 Base Params；批量添加时每个非空行成为一个有序 Item。Item 可单独设置 Prompt、Negative Prompt、完整 Params Override，或复制、上移、下移、删除、运行、取消和重试。批次并发和 Provider 全局并发会同时生效，较小者限制当前 Batch，Provider 限制还会跨 Batch 共享。
+
+常用字段和“完整 Base Params JSON”编辑的是同一个 JSON Object。公共参数与单项覆盖按 Object 递归合并，单项的 scalar、array 或 `null` 替换公共值；未知 stable-diffusion.cpp 字段会原样保留。以下字段由工作台根据 Item 和 Asset 引用强制生成，不能写入 Base Params 或 Params Override：
+
+```text
+prompt, negative_prompt, init_image, ref_images,
+mask_image, control_image, ip_adapter_image
+```
+
+Item 可从 active 精选库选择 init、refs、mask、control 和 IP Adapter 图片；选择器只显示 `image/*`。已引用后归档的输入仍保留，直到在 Item 中明确移除。请求发送前，工作台读取受控 Asset 文件并在内存中生成 Data URL；持久化快照只保存 ID、哈希、类型、尺寸和大小，不保存 Base64。
+
+成功图片会逐张导入共享 Asset 库并默认进入 `archive`，同时显示在当前 Batch 结果区；点击“设为精选”后才会出现在其他模块的 active Picker。部分图片导入成功、后续图片失败时，已导入结果仍保留，Attempt 记录失败原因。
+
+批次数据位于：
+
+```text
+<data-dir>/images/batches/<batch-id>/batch.json
+```
+
+每次运行和重试都会新增 Attempt；其中执行快照不可变，状态和远端进度会持续更新，旧历史不会被重试覆盖。状态包括 `queued`、`submitting`、`polling`、`succeeded`、`failed`、`cancelled` 和 `interrupted`，浏览器通过工作台 SSE 实时更新。工作台重启后，遗留的活动 Attempt 会标为 `interrupted`，不会猜测远端状态或自动重发；需要时手动重试即可。
 
 ## 共享资产与 Gallery
 

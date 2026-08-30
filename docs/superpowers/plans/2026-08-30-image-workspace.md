@@ -815,11 +815,11 @@ Task 9 completion note (2026-08-31): the native browser workspace now manages se
 **Interfaces:**
 - Produces: 用户运行说明、Provider/参数说明、数据路径、Asset 流程、恢复语义和阶段完成状态
 
-- [ ] **Step 1: Update README with exact image workflows**
+- [x] **Step 1: Update README with exact image workflows**
 
 Document `<data-dir>/images/batches`, default `sdcpp-local`, backend-management separation, capabilities, common/advanced params merge, reserved managed fields, active input/archive output behavior, batch concurrency, retry/cancel and interrupted Attempt semantics.
 
-- [ ] **Step 2: Run full static and test verification**
+- [x] **Step 2: Run full static and test verification**
 
 Run: `gofmt -w cmd internal && go vet ./... && go test ./... -count=1`
 
@@ -827,11 +827,11 @@ Run: `go test -race ./internal/config ./internal/sdcpp ./internal/imagegen ./int
 
 Run: `VERIFY_DIR=$(mktemp -d) && go build -o "$VERIFY_DIR/ai-workbench" ./cmd/ai-workbench && git diff --check`
 
-- [ ] **Step 3: Run real binary HTTP smoke test**
+- [x] **Step 3: Run real binary HTTP smoke test**
 
 Start the built binary on an unused loopback port with a temporary data dir. Use `curl` to read the default image Provider, create a Batch and Items, load `/assets/images.js`, verify the Batch file exists, send SIGINT and verify the port closes cleanly.
 
-- [ ] **Step 4: Review requirements and close documentation**
+- [x] **Step 4: Review requirements and close documentation**
 
 Check the design line by line, scan for placeholders/contradictions, mark design and master phase 5 completed, then commit:
 
@@ -839,6 +839,8 @@ Check the design line by line, scan for placeholders/contradictions, mark design
 git add README.md docs
 git commit -m "docs: record image workspace delivery"
 ```
+
+Task 10 verification note (2026-08-31): README now documents the exact Image Provider, Batch/Item, parameter merge, Asset, concurrency and Attempt recovery workflows. The standalone and master designs match delivered behavior and mark phase 5 complete. Full tests, selected race suites, vet, build verification, requirement review, and a real binary HTTP/persistence/SIGINT smoke test all pass.
 
 - [ ] **Step 5: Merge, push and verify remote**
 
