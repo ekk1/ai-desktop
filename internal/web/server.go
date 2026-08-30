@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 
+	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 )
 
@@ -13,9 +14,11 @@ import (
 var staticFiles embed.FS
 
 type Options struct {
-	Version string
-	DataDir string
-	Config  config.Config
+	Version           string
+	DataDir           string
+	Config            config.Config
+	BackendRepository *backend.Repository
+	BackendManager    *backend.Manager
 }
 
 type errorEnvelope struct {
@@ -51,6 +54,15 @@ func NewHandler(options Options) http.Handler {
 	mux.HandleFunc("/api/v1/", func(response http.ResponseWriter, _ *http.Request) {
 		writeAPIError(response, http.StatusNotFound, "not_found", "resource not found")
 	})
+	if options.BackendRepository != nil && options.BackendManager != nil {
+		backendAPI := backendHandler{
+			repository: options.BackendRepository,
+			manager:    options.BackendManager,
+			maxBody:    options.Config.MaxUploadBytes,
+		}
+		mux.HandleFunc("/api/v1/backends", backendAPI.serve)
+		mux.HandleFunc("/api/v1/backends/", backendAPI.serve)
+	}
 
 	serveEmbeddedFile(mux, "/assets/styles.css", "static/styles.css", "text/css; charset=utf-8")
 	serveEmbeddedFile(mux, "/assets/app.js", "static/app.js", "text/javascript; charset=utf-8")

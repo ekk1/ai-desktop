@@ -1,23 +1,28 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 )
 
 func TestNewServerAlwaysUsesLoopbackAddress(t *testing.T) {
 	cfg := config.Default()
+	dataDir := t.TempDir()
 
-	server, err := NewServer("/tmp/workbench-test", cfg, "test", 0)
+	server, err := NewServer(dataDir, cfg, "test", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +30,7 @@ func TestNewServerAlwaysUsesLoopbackAddress(t *testing.T) {
 		t.Fatalf("Addr = %q, want %q", got, want)
 	}
 
-	server, err = NewServer("/tmp/workbench-test", cfg, "test", 9001)
+	server, err = NewServer(dataDir, cfg, "test", 9001)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +50,7 @@ func TestNewServerRejectsInvalidPortOverride(t *testing.T) {
 }
 
 func TestNewServerConnectsEmbeddedHandler(t *testing.T) {
-	server, err := NewServer("/tmp/workbench-test", config.Default(), "test-version", 0)
+	server, err := NewServer(t.TempDir(), config.Default(), "test-version", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +100,40 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	profile := backend.DefaultProfile()
+	profile.Name = "lifecycle backend"
+	profile.Command = "sleep 30"
+	encodedProfile, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/backends", port), "application/json", bytes.NewReader(encodedProfile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created backend.Profile
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		_ = response.Body.Close()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create backend status = %d", response.StatusCode)
+	}
+	response, err = http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/backends/%s/start", port, created.ID), "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started backend.RunInfo
+	if err := json.NewDecoder(response.Body).Decode(&started); err != nil {
+		_ = response.Body.Close()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusAccepted || started.PID <= 0 {
+		t.Fatalf("start backend = %d, %#v", response.StatusCode, started)
+	}
+
 	cancel()
 	select {
 	case err := <-result:
@@ -114,6 +153,12 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "instance.lock")); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "backends", "profiles.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(started.PID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("managed backend PID %d survived app shutdown: %v", started.PID, err)
 	}
 }
 

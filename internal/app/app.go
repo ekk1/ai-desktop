@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 	"github.com/ekk1/ai-desktop/internal/instance"
 	"github.com/ekk1/ai-desktop/internal/web"
@@ -22,23 +23,40 @@ type Options struct {
 }
 
 func NewServer(dataDir string, cfg config.Config, version string, portOverride int) (*http.Server, error) {
+	server, _, err := newRuntime(dataDir, cfg, version, portOverride)
+	return server, err
+}
+
+func newRuntime(dataDir string, cfg config.Config, version string, portOverride int) (*http.Server, *backend.Manager, error) {
 	if portOverride < 0 || portOverride > 65535 {
-		return nil, fmt.Errorf("port override must be between 1 and 65535")
+		return nil, nil, fmt.Errorf("port override must be between 1 and 65535")
 	}
 	runtimeConfig := cfg
 	if portOverride != 0 {
 		runtimeConfig.ListenPort = portOverride
 	}
 	if err := runtimeConfig.Validate(); err != nil {
-		return nil, fmt.Errorf("validate runtime config: %w", err)
+		return nil, nil, fmt.Errorf("validate runtime config: %w", err)
 	}
+	repository, err := backend.OpenRepository(filepath.Join(dataDir, "backends", "profiles.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("open backend profiles: %w", err)
+	}
+	manager := backend.NewManager(repository, filepath.Join(dataDir, "backends", "crash-logs"))
 
-	return &http.Server{
-		Addr:              "127.0.0.1:" + strconv.Itoa(runtimeConfig.ListenPort),
-		Handler:           web.NewHandler(web.Options{Version: version, DataDir: dataDir, Config: runtimeConfig}),
+	server := &http.Server{
+		Addr: "127.0.0.1:" + strconv.Itoa(runtimeConfig.ListenPort),
+		Handler: web.NewHandler(web.Options{
+			Version:           version,
+			DataDir:           dataDir,
+			Config:            runtimeConfig,
+			BackendRepository: repository,
+			BackendManager:    manager,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
-	}, nil
+	}
+	return server, manager, nil
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -59,7 +77,7 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
-	server, err := NewServer(dataDir, cfg, options.Version, options.PortOverride)
+	server, manager, err := newRuntime(dataDir, cfg, options.Version, options.PortOverride)
 	if err != nil {
 		return err
 	}
@@ -71,18 +89,25 @@ func Run(ctx context.Context, options Options) error {
 
 	select {
 	case err := <-serverResult:
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSeconds)*time.Second)
+		defer cancel()
+		managerErr := manager.Shutdown(shutdownContext)
 		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+			err = nil
 		}
-		return fmt.Errorf("serve %s: %w", server.Addr, err)
+		if err != nil {
+			err = fmt.Errorf("serve %s: %w", server.Addr, err)
+		}
+		return errors.Join(err, managerErr)
 	case <-ctx.Done():
 		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		shutdownErr := server.Shutdown(shutdownContext)
 		serveErr := <-serverResult
+		managerErr := manager.Shutdown(shutdownContext)
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		}
-		return errors.Join(shutdownErr, serveErr)
+		return errors.Join(shutdownErr, serveErr, managerErr)
 	}
 }
