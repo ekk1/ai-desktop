@@ -1,5 +1,6 @@
 import { createLLMConfig } from "/assets/llm-config.js";
 import { createLLMWorkspace } from "/assets/llm.js";
+import { createImageConfig } from "/assets/image-config.js";
 
 const modules = {
   llm: {
@@ -61,6 +62,7 @@ const galleryWorkspace = document.querySelector("#gallery-workspace");
 const knowledgeWorkspace = document.querySelector("#knowledge-workspace");
 const settingsWorkspace = document.querySelector("#settings-workspace");
 const llmConfigWorkspace = createLLMConfig({ readAPIError });
+const imageConfigWorkspace = createImageConfig({ readAPIError });
 const llmWorkspaceController = createLLMWorkspace({ sidebarContent, sidebarSearch: document.querySelector("#sidebar-search"), readAPIError, openAssetPicker });
 
 const backendUI = {
@@ -138,8 +140,13 @@ function selectModule(name) {
   }
   if (showGallery) refreshGallery();
   if (showKnowledge) refreshKnowledge();
-  if (showSettings) llmConfigWorkspace.enter();
-  else llmConfigWorkspace.leave();
+  if (showSettings) {
+    llmConfigWorkspace.enter();
+    imageConfigWorkspace.enter();
+  } else {
+    llmConfigWorkspace.leave();
+    imageConfigWorkspace.leave();
+  }
   if (showLLM) llmWorkspaceController.enter();
   else llmWorkspaceController.leave();
   window.location.hash = name;

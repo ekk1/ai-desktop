@@ -362,6 +362,10 @@ input:focus-visible {
   box-shadow: var(--shadow);
 }
 
+.settings-card-wide {
+  grid-column: 1 / -1;
+}
+
 .config-row-list {
   display: grid;
   gap: 0.45rem;
@@ -1606,6 +1610,10 @@ summary {
 
   .settings-sections {
     grid-template-columns: 1fr;
+  }
+
+  .settings-card-wide {
+    grid-column: auto;
   }
 
   .config-row-actions {

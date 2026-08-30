@@ -134,6 +134,7 @@ func NewHandler(options Options) http.Handler {
 	serveEmbeddedFile(mux, "/assets/styles.css", "static/styles.css", "text/css; charset=utf-8")
 	serveEmbeddedFile(mux, "/assets/app.js", "static/app.js", "text/javascript; charset=utf-8")
 	serveEmbeddedFile(mux, "/assets/llm-config.js", "static/llm-config.js", "text/javascript; charset=utf-8")
+	serveEmbeddedFile(mux, "/assets/image-config.js", "static/image-config.js", "text/javascript; charset=utf-8")
 	serveEmbeddedFile(mux, "/assets/llm.js", "static/llm.js", "text/javascript; charset=utf-8")
 	mux.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/" {

@@ -328,6 +328,19 @@
           <p class="inline-message" id="llm-config-save-status" aria-live="polite">尚未读取配置。</p>
 
           <div class="settings-sections">
+            <section class="settings-card settings-card-wide" aria-labelledby="image-provider-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">stable-diffusion.cpp</p><h3 id="image-provider-heading">Image Providers</h3></div>
+                <div class="button-row compact-buttons">
+                  <button type="button" class="text-button" id="image-config-refresh">重新读取</button>
+                  <button type="button" class="secondary-button" id="image-provider-new">新增 Provider</button>
+                  <button type="button" class="primary-button" id="image-config-save">保存 Image 配置</button>
+                </div>
+              </header>
+              <p class="inline-message" id="image-config-save-status" aria-live="polite">尚未读取 Image 配置。</p>
+              <div class="config-row-list" id="image-provider-list"></div>
+            </section>
+
             <section class="settings-card" aria-labelledby="llm-provider-heading">
               <header class="settings-card-heading">
                 <div><p class="eyebrow">请求目标</p><h3 id="llm-provider-heading">Providers</h3></div>
@@ -499,6 +512,38 @@
       </details>
       <p class="form-error" id="llm-provider-error" role="alert"></p>
       <footer class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="llm-provider-editor">取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
+    </form>
+  </dialog>
+  <dialog id="image-provider-editor" class="editor-dialog config-editor-dialog">
+    <form id="image-provider-form">
+      <header class="dialog-heading">
+        <div><p class="eyebrow">生图配置</p><h2 id="image-provider-editor-title">Image Provider</h2></div>
+        <button type="button" class="text-button" data-image-dialog-close>关闭</button>
+      </header>
+      <div class="form-grid">
+        <label>ID <input id="image-provider-id" required maxlength="120"></label>
+        <label>名称 <input id="image-provider-name" required maxlength="240"></label>
+        <label class="full-width">Base URL <input id="image-provider-base-url" type="url" required placeholder="http://127.0.0.1:1234"></label>
+        <label>最大并发任务 <input id="image-provider-concurrency" type="number" min="1" max="16" required></label>
+        <label class="checkbox-field"><input id="image-provider-enabled" type="checkbox"> 启用</label>
+      </div>
+      <details class="advanced-form">
+        <summary>Headers、超时与响应限制</summary>
+        <div class="form-grid details-grid">
+          <label class="full-width">Headers JSON Object <textarea id="image-provider-headers" rows="6" spellcheck="false">{}</textarea></label>
+          <label>连接超时（秒） <input id="image-provider-connect-timeout" type="number" min="1" max="300" required></label>
+          <label>任务超时（秒） <input id="image-provider-job-timeout" type="number" min="1" max="86400" required></label>
+          <label>轮询间隔（毫秒） <input id="image-provider-poll-interval" type="number" min="100" max="10000" required></label>
+          <label>响应上限（字节） <input id="image-provider-max-response" type="number" min="1" max="1073741824" required></label>
+          <label>单图上限（字节） <input id="image-provider-max-image" type="number" min="1" max="1073741824" required></label>
+        </div>
+      </details>
+      <p class="inline-message" id="image-provider-capability-status" aria-live="polite">保存配置后可在列表测试 capabilities。</p>
+      <p class="form-error" id="image-provider-error" role="alert"></p>
+      <footer class="dialog-actions">
+        <button type="button" class="secondary-button" data-image-dialog-close>取消</button>
+        <button type="submit" class="primary-button">应用到草稿</button>
+      </footer>
     </form>
   </dialog>
   <dialog id="llm-quick-path-editor" class="editor-dialog config-editor-dialog">

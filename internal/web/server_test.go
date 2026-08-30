@@ -186,6 +186,34 @@ func TestEmbeddedLLMConfigExposesProgressiveProviderEditors(t *testing.T) {
 	}
 }
 
+func TestEmbeddedImageConfigExposesProgressiveProviderEditors(t *testing.T) {
+	index := getBody(t, "/")
+	for _, marker := range []string{
+		`id="image-provider-list"`, `id="image-provider-new"`, `id="image-config-refresh"`,
+		`id="image-config-save"`, `id="image-config-save-status"`, `id="image-provider-editor"`,
+		`id="image-provider-id"`, `id="image-provider-name"`, `id="image-provider-base-url"`,
+		`id="image-provider-enabled"`, `id="image-provider-concurrency"`, `id="image-provider-headers"`,
+		`id="image-provider-connect-timeout"`, `id="image-provider-job-timeout"`, `id="image-provider-poll-interval"`,
+		`id="image-provider-max-response"`, `id="image-provider-max-image"`, `id="image-provider-capability-status"`,
+	} {
+		if !strings.Contains(index, marker) {
+			t.Errorf("Image config does not contain %s", marker)
+		}
+	}
+	script := getBody(t, "/assets/image-config.js")
+	for _, behavior := range []string{
+		`export function createImageConfig`, `fetch("/api/v1/images/config"`, `/capabilities`, `Headers`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("Image config script does not contain %s", behavior)
+		}
+	}
+	app := getBody(t, "/assets/app.js")
+	if !strings.Contains(app, `createImageConfig`) {
+		t.Error("app does not wire createImageConfig")
+	}
+}
+
 func TestEmbeddedLLMWorkspaceExposesBranchingPanelControls(t *testing.T) {
 	index := getBody(t, "/")
 	for _, marker := range []string{

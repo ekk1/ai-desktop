@@ -723,23 +723,23 @@ Task 7 completion note (2026-08-31): the native API now covers image Provider co
 - Consumes: `GET/PUT /api/v1/images/config` and capabilities endpoint
 - `app.js` only wires lifecycle; configuration domain logic stays in `image-config.js`
 
-- [ ] **Step 1: Write failing embedded Image Config contract test**
+- [x] **Step 1: Write failing embedded Image Config contract test**
 
 Assert Settings markup has image Provider list/new/editor, Base URL, headers, timeouts, polling, byte limits, concurrency, enabled, capability test and save status. Assert `/assets/image-config.js` is served, exports `createImageConfig` and contains both image config/capabilities API paths.
 
-- [ ] **Step 2: Run contract test and verify RED**
+- [x] **Step 2: Run contract test and verify RED**
 
 Run: `go test ./internal/web -run TestEmbeddedImageConfig -count=1 -v`
 
-- [ ] **Step 3: Implement progressive Provider editor**
+- [x] **Step 3: Implement progressive Provider editor**
 
 Default row shows name, URL, enabled and edit/test actions. Dialog basic section shows ID/name/Base URL/enabled/concurrency; `<details>` contains Headers JSON, timeouts, polling and byte limits. Validate Headers as a string-valued Object and numeric ranges locally, but render the authoritative server error beside the form. Save sends one complete `ImageConfig` object.
 
-- [ ] **Step 4: Wire Settings lifecycle and responsive styles**
+- [x] **Step 4: Wire Settings lifecycle and responsive styles**
 
 Import `createImageConfig` in `app.js`, instantiate once, call enter only for Settings and leave otherwise alongside existing LLM config controller. Add compact config rows and near-full-screen mobile Dialog rules without changing other modules.
 
-- [ ] **Step 5: Verify and commit Task 8**
+- [x] **Step 5: Verify and commit Task 8**
 
 Run: `go test ./internal/web ./internal/app -count=1 && git diff --check`
 
@@ -747,6 +747,8 @@ Run: `go test ./internal/web ./internal/app -count=1 && git diff --check`
 git add internal/web
 git commit -m "feat: configure image providers in browser"
 ```
+
+Task 8 completion note (2026-08-31): Settings now includes a dependency-free Image Provider editor with progressive disclosure for technical fields, strict local validation, capability probing, and complete authoritative config saves. Initial load, refresh, and save are serialized with a busy state so a stale response or an unloaded draft cannot replace existing providers. Responsive behavior, embedded asset routing, application lifecycle wiring, race checks, and focused review are complete.
 
 ### Task 9: 响应式生图 Batch、Item 和结果工作区
 
