@@ -16,7 +16,9 @@
 - 文件名只用于显示；真实路径由内容哈希和受控扩展名生成。
 - 元数据保存稳定资产 ID、SHA-256、媒体类型、来源、备注和引用。
 - 被引用资产禁止物理删除，但允许归档。
+- Gallery 支持批量 active/archive、单文件下载和多选 ZIP 导出；后续模块复用只展示 active 资产的原生选择器。
 - 知识库只做文件夹、标题、纯文本、标签和资产引用，不实现 RAG、embedding 或自动召回。
+- 知识条目变更必须同步资产引用，失败时不得留下只更新一侧的数据。
 - 所有写入继续使用标准库、版本化 JSON 和原子替换。
 
 ---
@@ -34,27 +36,27 @@
 - Produces: `asset.OpenRepository(indexPath, filesDir string)`
 - Produces: `Import`, `List`, `Get`, `SetState`, `UpdateMetadata`, `AddReference`, `RemoveReference`, `Delete`, `OpenContent`
 
-- [ ] **Step 1: 写模型、导入与去重失败测试**
+- [x] **Step 1: 写模型、导入与去重失败测试**
 
 测试使用真实临时文件：导入后默认 archive、ID 稳定存在、SHA-256 正确、显示名不参与真实路径、PNG/JPEG 可通过 `image.DecodeConfig` 获取尺寸、同内容只产生一个物理文件但保留两个资产记录。
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `go test ./internal/asset -run 'Test(Import|Asset)' -v`
 
-- [ ] **Step 3: 实现安全导入**
+- [x] **Step 3: 实现安全导入**
 
 导入先流式写到 `tmp` 并计算哈希与字节数，再原子移动到 `<files-dir>/<sha256><ext>`。扩展名来自受限 MIME 映射或经过净化的原扩展名；绝不拼接用户目录。失败时清理临时文件。
 
-- [ ] **Step 4: 写状态、引用与删除失败测试**
+- [x] **Step 4: 写状态、引用与删除失败测试**
 
 测试 active/archive 切换、元数据修改、添加/移除唯一引用、引用存在时 Delete 返回 `ErrReferenced`、无引用时同时移除资产记录并仅在最后一个内容记录删除物理文件。
 
-- [ ] **Step 5: 实现 Repository 并发与持久化**
+- [x] **Step 5: 实现 Repository 并发与持久化**
 
 文档包含 `schema_version: 1` 和资产列表；返回值全部深拷贝，列表支持状态、媒体类型和文本过滤并按创建时间倒序。
 
-- [ ] **Step 6: 运行并提交 Task 1**
+- [x] **Step 6: 运行并提交 Task 1**
 
 Run: `go test ./internal/asset -count=1 -v`
 
@@ -76,20 +78,22 @@ git commit -m "feat: add shared asset repository"
 - Produces: `GET/PATCH/DELETE /api/v1/assets/{id}`
 - Produces: `GET /api/v1/assets/{id}/content`
 - Produces: `POST /api/v1/assets/{id}/state`
+- Produces: `POST /api/v1/assets/state` 批量调整状态
+- Produces: `POST /api/v1/assets/export` 多选 ZIP 导出
 
-- [ ] **Step 1: 写上传、查询、状态和内容下载失败测试**
+- [x] **Step 1: 写上传、查询、状态和内容下载失败测试**
 
 通过 `multipart.Writer` 上传真实 PNG Fixture，验证默认 archive、状态过滤、active 切换、正确 Content-Type、下载原始字节、备注修改和路径穿越文件名不影响存储路径。
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `go test ./internal/web -run TestAsset -v`
 
-- [ ] **Step 3: 实现 API 与 App 装配**
+- [x] **Step 3: 实现 API 与 App 装配**
 
 上传受 `MaxUploadBytes` 限制；JSON 修改严格解码；下载使用受控 Repository File，不接收磁盘路径；App 打开 `<data-dir>/assets/index.json` 与 `files/`。
 
-- [ ] **Step 4: 运行并提交 Task 2**
+- [x] **Step 4: 运行并提交 Task 2**
 
 Run: `go test ./internal/web ./internal/app -count=1 -v`
 
@@ -108,11 +112,11 @@ git commit -m "feat: expose shared asset API"
 
 - [ ] **Step 1: 写 Gallery 页面契约失败测试**
 
-验证导入控件、全部/active/archive 筛选、响应式媒体网格、预览层、精选切换、备注和删除操作挂载点。
+验证导入控件、全部/active/archive 筛选、响应式媒体网格、预览层、多选、批量精选切换、ZIP 导出、备注和删除操作挂载点；验证可被后续模块复用的 active Asset 选择器挂载点。
 
 - [ ] **Step 2: 实现并验证 Gallery**
 
-图片使用受控内容 URL；视频使用原生 `<video controls preload="metadata">`；其他附件显示文件信息。删除冲突展示引用明细，不静默失败。
+图片使用受控内容 URL；视频使用原生 `<video controls preload="metadata">`；其他附件显示文件信息。删除冲突展示引用明细，不静默失败。选择器始终请求 `GET /api/v1/assets?state=active`，并以原生 Dialog 暴露选择结果。
 
 Run: `go test ./internal/web -v`
 
@@ -129,6 +133,8 @@ git commit -m "feat: add shared asset gallery"
 - Create: `internal/knowledge/note.go`
 - Create: `internal/knowledge/repository.go`
 - Create: `internal/knowledge/repository_test.go`
+- Create: `internal/knowledge/service.go`
+- Create: `internal/knowledge/service_test.go`
 - Create: `internal/web/knowledge.go`
 - Create: `internal/web/knowledge_test.go`
 - Modify: `internal/web/server.go`
@@ -147,13 +153,17 @@ git commit -m "feat: add shared asset gallery"
 
 Run: `go test ./internal/knowledge -v`
 
-- [ ] **Step 3: 写并实现 API 测试**
+- [ ] **Step 3: 写并实现资产引用服务测试**
+
+使用真实 Asset 与 Knowledge Repository 验证创建、更新和删除时引用同步；未知资产必须拒绝；任一步失败时恢复两侧原状态。
+
+- [ ] **Step 4: 写并实现 API 测试**
 
 验证 CRUD、过滤参数、无效 JSON 和未知 ID 的 Error Envelope；App 打开 `<data-dir>/knowledge/notes.json`。
 
 Run: `go test ./internal/web ./internal/app -count=1 -v`
 
-- [ ] **Step 4: 提交 Task 4**
+- [ ] **Step 5: 提交 Task 4**
 
 ```bash
 git add internal/knowledge internal/web internal/app
