@@ -223,7 +223,7 @@ PUT 提交完整 LLM 配置并严格校验 Provider/QuickPath/Template 引用。
 - `PUT/DELETE /api/v1/llm/sessions/{session-id}/panels/{panel-id}`
 - `POST /api/v1/llm/sessions/{session-id}/panels/{panel-id}/restore/{revision-id}`
 
-GET Session 返回元数据、整棵树、当前路径和分支摘要，避免浏览器自行推导错误树状态。
+GET Session 返回元数据、整棵树、当前路径和分支摘要，避免浏览器自行推导错误树状态。Web DTO 还为每个 Panel 返回 `exa_candidate` 布尔值；该值由 Server 的严格检测器计算，不写入 Workspace，也不由浏览器自行判定。
 
 ### 执行
 

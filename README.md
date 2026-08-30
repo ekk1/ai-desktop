@@ -21,7 +21,7 @@
 - 带文件夹、标签、正文和 Asset 引用的知识备忘录
 - 资产引用保护：知识条目仍在引用的文件不能物理删除
 
-LLM 请求、图像和视频生成将在后续阶段按[总体设计](docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md)逐步接入。
+LLM 请求工作区正在按[独立设计](docs/superpowers/specs/2026-08-30-llm-workspace-design.md)实施；图像和视频生成随后按[总体设计](docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md)接入。
 
 ## 要求
 
