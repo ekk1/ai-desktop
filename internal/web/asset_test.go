@@ -1,6 +1,7 @@
 package web
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -16,6 +17,79 @@ import (
 	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/config"
 )
+
+func TestAssetBatchStateIsAtomic(t *testing.T) {
+	handler, repository := newAssetHandler(t)
+	first := uploadAsset(t, handler, "first.txt", "text/plain", []byte("first"))
+	second := uploadAsset(t, handler, "second.txt", "text/plain", []byte("second"))
+
+	failed := doJSON(t, handler, http.MethodPost, "/api/v1/assets/state", map[string]any{
+		"asset_ids": []string{first.ID, "missing"},
+		"state":     "active",
+	})
+	if failed.Code != http.StatusNotFound {
+		t.Fatalf("batch with missing asset status = %d, want 404: %s", failed.Code, failed.Body.String())
+	}
+	unchanged, ok := repository.Get(first.ID)
+	if !ok || unchanged.State != asset.StateArchive {
+		t.Fatalf("first asset changed after failed batch: %#v", unchanged)
+	}
+
+	response := doJSON(t, handler, http.MethodPost, "/api/v1/assets/state", map[string]any{
+		"asset_ids": []string{first.ID, second.ID, first.ID},
+		"state":     "active",
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("batch state status = %d: %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Assets []asset.Asset `json:"assets"`
+	}
+	decodeBody(t, response, &body)
+	if len(body.Assets) != 2 || body.Assets[0].State != asset.StateActive || body.Assets[1].State != asset.StateActive {
+		t.Fatalf("updated assets = %#v", body.Assets)
+	}
+}
+
+func TestAssetExportReturnsSelectedFilesAsZIP(t *testing.T) {
+	handler, _ := newAssetHandler(t)
+	first := uploadAsset(t, handler, "same.txt", "text/plain", []byte("first"))
+	second := uploadAsset(t, handler, "same.txt", "text/plain", []byte("second"))
+
+	response := doJSON(t, handler, http.MethodPost, "/api/v1/assets/export", map[string]any{
+		"asset_ids": []string{first.ID, second.ID},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("export status = %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/zip" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(response.Body.Bytes()), int64(response.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive.File) != 2 {
+		t.Fatalf("zip entries = %d, want 2", len(archive.File))
+	}
+	if archive.File[0].Name != "same.txt" || archive.File[1].Name != "same-2.txt" {
+		t.Fatalf("zip entry names = %q, %q", archive.File[0].Name, archive.File[1].Name)
+	}
+	for index, want := range []string{"first", "second"} {
+		file, err := archive.File[index].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var contents bytes.Buffer
+		if _, err := contents.ReadFrom(file); err != nil {
+			t.Fatal(err)
+		}
+		_ = file.Close()
+		if contents.String() != want {
+			t.Fatalf("entry %d = %q, want %q", index, contents.String(), want)
+		}
+	}
+}
 
 func TestAssetUploadStateMetadataAndContent(t *testing.T) {
 	handler, repository := newAssetHandler(t)

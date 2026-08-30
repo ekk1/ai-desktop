@@ -1,12 +1,15 @@
 package web
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
@@ -23,6 +26,14 @@ func (handler assetHandler) serve(response http.ResponseWriter, request *http.Re
 		handler.collection(response, request)
 		return
 	}
+	if path == "state" {
+		handler.batchState(response, request)
+		return
+	}
+	if path == "export" {
+		handler.export(response, request)
+		return
+	}
 	segments := strings.Split(path, "/")
 	id := segments[0]
 	if len(segments) == 1 {
@@ -36,6 +47,109 @@ func (handler assetHandler) serve(response http.ResponseWriter, request *http.Re
 		handler.state(response, request, id)
 	default:
 		writeAPIError(response, http.StatusNotFound, "not_found", "resource not found")
+	}
+}
+
+func (handler assetHandler) batchState(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		response.Header().Set("Allow", http.MethodPost)
+		writeAPIError(response, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	var input struct {
+		AssetIDs []string    `json:"asset_ids"`
+		State    asset.State `json:"state"`
+	}
+	if !handler.decode(response, request, &input) {
+		return
+	}
+	items, err := handler.repository.SetStates(input.AssetIDs, input.State)
+	if err != nil {
+		handler.writeError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Assets []asset.Asset `json:"assets"`
+	}{Assets: items})
+}
+
+func (handler assetHandler) export(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		response.Header().Set("Allow", http.MethodPost)
+		writeAPIError(response, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	var input struct {
+		AssetIDs []string `json:"asset_ids"`
+	}
+	if !handler.decode(response, request, &input) {
+		return
+	}
+	if len(input.AssetIDs) == 0 {
+		writeAPIError(response, http.StatusBadRequest, "invalid_asset", "at least one asset ID is required")
+		return
+	}
+
+	type selectedContent struct {
+		file io.ReadCloser
+		item asset.Asset
+	}
+	selected := make([]selectedContent, 0, len(input.AssetIDs))
+	seen := make(map[string]struct{}, len(input.AssetIDs))
+	defer func() {
+		for _, content := range selected {
+			_ = content.file.Close()
+		}
+	}()
+	for _, id := range input.AssetIDs {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		file, item, err := handler.repository.OpenContent(id)
+		if err != nil {
+			handler.writeError(response, err)
+			return
+		}
+		selected = append(selected, selectedContent{file: file, item: item})
+	}
+
+	response.Header().Set("Content-Type", "application/zip")
+	response.Header().Set("Content-Disposition", `attachment; filename="assets.zip"`)
+	writer := zip.NewWriter(response)
+	names := make(map[string]int, len(selected))
+	for _, content := range selected {
+		name := uniqueArchiveName(content.item.DisplayName, names)
+		entry, err := writer.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+		if err != nil {
+			return
+		}
+		if _, err := io.Copy(entry, content.file); err != nil {
+			return
+		}
+	}
+	_ = writer.Close()
+}
+
+func uniqueArchiveName(displayName string, used map[string]int) string {
+	name := filepath.Base(strings.TrimSpace(displayName))
+	if name == "" || name == "." {
+		name = "asset"
+	}
+	count := used[name]
+	used[name] = count + 1
+	if count == 0 {
+		return name
+	}
+	extension := filepath.Ext(name)
+	base := strings.TrimSuffix(name, extension)
+	for {
+		count++
+		candidate := base + "-" + strconv.Itoa(count) + extension
+		if used[candidate] == 0 {
+			used[candidate] = 1
+			return candidate
+		}
 	}
 }
 

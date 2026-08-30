@@ -162,6 +162,51 @@ func (repository *Repository) SetState(id string, state State) (Asset, error) {
 	return repository.update(id, func(item *Asset) { item.State = state })
 }
 
+func (repository *Repository) SetStates(ids []string, state State) ([]Asset, error) {
+	if err := validateState(state); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("at least one asset ID is required")
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+
+	indexes := make([]int, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		index := -1
+		for candidate := range repository.assets {
+			if repository.assets[candidate].ID == id {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			return nil, ErrNotFound
+		}
+		indexes = append(indexes, index)
+	}
+
+	now := time.Now().UTC()
+	updated := cloneAssets(repository.assets)
+	result := make([]Asset, 0, len(indexes))
+	for _, index := range indexes {
+		updated[index].State = state
+		updated[index].UpdatedAt = now
+		result = append(result, cloneAsset(updated[index]))
+	}
+	if err := repository.save(updated); err != nil {
+		return nil, err
+	}
+	repository.assets = updated
+	return result, nil
+}
+
 func (repository *Repository) UpdateMetadata(id, displayName, notes string) (Asset, error) {
 	if strings.TrimSpace(displayName) == "" {
 		return Asset{}, fmt.Errorf("display name is required")
