@@ -84,9 +84,127 @@
             </div>
           </dl>
         </section>
+
+        <section class="backend-workspace" id="backend-workspace" hidden>
+          <div class="backend-toolbar">
+            <div>
+              <p class="section-kicker">本地进程</p>
+              <h2>后端配置</h2>
+            </div>
+            <div class="button-row">
+              <button type="button" class="secondary-button" id="backend-refresh">刷新</button>
+              <button type="button" class="primary-button" id="backend-new">新建配置</button>
+            </div>
+          </div>
+
+          <div class="backend-grid">
+            <div class="backend-profile-panel">
+              <div class="backend-list" id="backend-list" aria-live="polite"></div>
+              <p class="inline-message" id="backend-list-message">正在读取后端配置…</p>
+            </div>
+
+            <article class="backend-detail" id="backend-detail">
+              <header class="backend-detail-header">
+                <div>
+                  <p class="eyebrow">当前后端</p>
+                  <h3 id="backend-detail-name">选择一个配置</h3>
+                  <p id="backend-detail-description">新建配置后即可启动本地 AI Server。</p>
+                </div>
+                <span class="state-pill" id="backend-state">未运行</span>
+              </header>
+
+              <div class="backend-actions">
+                <button type="button" class="primary-button" id="backend-start" disabled>启动</button>
+                <button type="button" class="danger-button" id="backend-stop" disabled>停止</button>
+                <button type="button" class="secondary-button" id="backend-edit" disabled>编辑</button>
+                <button type="button" class="text-button danger-text" id="backend-delete" disabled>删除</button>
+              </div>
+
+              <details class="backend-command-details">
+                <summary>启动命令与运行信息</summary>
+                <pre id="backend-command-preview">尚未选择配置</pre>
+                <dl class="compact-facts">
+                  <div><dt>PID</dt><dd id="backend-pid">—</dd></div>
+                  <div><dt>运行时间</dt><dd id="backend-uptime">—</dd></div>
+                  <div><dt>工作目录</dt><dd id="backend-workdir">—</dd></div>
+                </dl>
+              </details>
+
+              <section class="log-panel" aria-labelledby="backend-log-title">
+                <div class="log-heading">
+                  <div>
+                    <p class="eyebrow">实时输出</p>
+                    <h4 id="backend-log-title">Server 日志</h4>
+                  </div>
+                  <div class="button-row compact-buttons">
+                    <button type="button" class="text-button" id="backend-log-save" disabled>保存</button>
+                    <button type="button" class="text-button" id="backend-log-clear" disabled>清屏</button>
+                  </div>
+                </div>
+                <div class="log-options">
+                  <label>搜索 <input type="search" id="backend-log-search" placeholder="过滤当前视图"></label>
+                  <label class="checkbox-field"><input type="checkbox" id="backend-log-follow" checked> 自动滚动</label>
+                </div>
+                <pre id="backend-log" tabindex="0">启动后在这里显示原始输出。</pre>
+                <p class="inline-message" id="backend-action-message" aria-live="polite"></p>
+              </section>
+            </article>
+          </div>
+        </section>
       </main>
     </div>
   </div>
+
+  <dialog id="backend-editor" class="editor-dialog">
+    <form id="backend-form">
+      <header class="dialog-heading">
+        <div>
+          <p class="eyebrow">后端配置</p>
+          <h2 id="backend-editor-title">新建配置</h2>
+        </div>
+        <button type="button" class="text-button" id="backend-editor-close">关闭</button>
+      </header>
+
+      <div class="form-grid">
+        <label>名称 <input id="backend-name" name="name" required maxlength="120"></label>
+        <label>说明 <input id="backend-description" name="description" maxlength="500"></label>
+        <label class="full-width">原始 Shell 命令
+          <textarea id="backend-command" name="command" required rows="7" spellcheck="false" placeholder="llama-server -m ${MODEL_SH} --port 8080"></textarea>
+        </label>
+        <label class="full-width">工作目录 <input id="backend-work-dir" name="work_dir" placeholder="留空则继承工作台目录"></label>
+      </div>
+
+      <details class="advanced-form">
+        <summary>环境变量、模板变量与就绪检测</summary>
+        <div class="form-grid details-grid">
+          <label class="full-width">环境变量 JSON
+            <textarea id="backend-env" rows="4" spellcheck="false">{}</textarea>
+          </label>
+          <label class="full-width">默认模板变量 JSON
+            <textarea id="backend-variables" rows="4" spellcheck="false">{}</textarea>
+          </label>
+          <label>就绪方式
+            <select id="backend-readiness-kind">
+              <option value="none">启动后立即就绪</option>
+              <option value="delay">固定等待</option>
+              <option value="http">HTTP 健康检查</option>
+              <option value="log_regex">日志正则</option>
+            </select>
+          </label>
+          <label>就绪值 <input id="backend-readiness-value" placeholder="秒数、URL 或正则"></label>
+          <label>就绪超时（秒） <input id="backend-readiness-timeout" type="number" min="1" max="3600" value="60"></label>
+          <label>停止宽限（秒） <input id="backend-stop-grace" type="number" min="1" max="300" value="10"></label>
+          <label>内存日志容量（字节） <input id="backend-log-capacity" type="number" min="65536" max="67108864" value="1048576"></label>
+        </div>
+      </details>
+
+      <p class="form-error" id="backend-form-error" role="alert"></p>
+      <footer class="dialog-actions">
+        <button type="button" class="secondary-button" id="backend-editor-cancel">取消</button>
+        <button type="submit" class="primary-button">保存配置</button>
+      </footer>
+    </form>
+  </dialog>
   <script type="module" src="/assets/app.js"></script>
 </body>
 </html>

@@ -154,6 +154,31 @@ func TestEmbeddedWorkbenchShellExposesModulesAndResponsiveControls(t *testing.T)
 	}
 }
 
+func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) {
+	index := getBody(t, "/")
+	for _, id := range []string{
+		`id="backend-list"`,
+		`id="backend-editor"`,
+		`id="backend-command"`,
+		`id="backend-start"`,
+		`id="backend-stop"`,
+		`id="backend-log"`,
+		`id="backend-log-save"`,
+		`id="backend-log-clear"`,
+	} {
+		if !strings.Contains(index, id) {
+			t.Errorf("backend workspace does not contain %s", id)
+		}
+	}
+
+	script := getBody(t, "/assets/app.js")
+	for _, behavior := range []string{`fetch("/api/v1/backends")`, "new EventSource"} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("backend script does not contain %s", behavior)
+		}
+	}
+}
+
 func getBody(t *testing.T, path string) string {
 	t.Helper()
 	recorder := httptest.NewRecorder()
