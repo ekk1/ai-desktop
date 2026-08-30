@@ -56,6 +56,14 @@
             <p class="inline-message" id="llm-session-list-status">正在读取会话…</p>
             <div class="llm-session-list" id="llm-session-list"></div>
           </div>
+          <div id="image-sidebar-controls">
+            <label class="sidebar-filter">文件夹
+              <select id="image-batch-folder-filter"><option value="">全部文件夹</option></select>
+            </label>
+            <button type="button" class="primary-button" id="image-batch-new">新建批次</button>
+            <p class="inline-message" id="image-batch-list-status">正在读取批次…</p>
+            <div class="image-batch-list" id="image-batch-list"></div>
+          </div>
         </div>
       </aside>
 
@@ -145,6 +153,64 @@
             <details><summary>请求快照与错误</summary><pre class="llm-run-technical"></pre></details>
           </article>
         </template>
+
+        <section class="image-workspace" id="image-workspace" hidden>
+          <form class="image-batch-toolbar" id="image-batch-form">
+            <div class="image-batch-fields">
+              <label>标题 <input id="image-batch-title" required maxlength="240" placeholder="自行输入批次标题"></label>
+              <label>文件夹 <input id="image-batch-folder" maxlength="240" placeholder="例如 concepts/characters"></label>
+              <label>Provider <select id="image-batch-provider" required></select></label>
+              <label>批次并发 <input id="image-batch-concurrency" type="number" min="1" max="16" required></label>
+            </div>
+            <div class="button-row">
+              <button type="button" class="text-button danger-text" id="image-batch-delete">删除批次</button>
+              <button type="button" class="secondary-button" id="image-batch-capabilities">读取 capabilities</button>
+              <button type="submit" class="primary-button" id="image-batch-save">保存批次</button>
+            </div>
+          </form>
+          <p class="inline-message" id="image-workspace-status" aria-live="polite">选择或新建批次。</p>
+
+          <details class="image-parameter-panel" open>
+            <summary>基础生成参数</summary>
+            <div class="image-common-params">
+              <label>宽度 <input id="image-param-width" type="number" min="64" step="8"></label>
+              <label>高度 <input id="image-param-height" type="number" min="64" step="8"></label>
+              <label>Seed <input id="image-param-seed" type="number" step="1"></label>
+              <label>单请求张数 <input id="image-param-batch-count" type="number" min="1"></label>
+              <label>Steps <input id="image-param-steps" type="number" min="1"></label>
+              <label>CFG <input id="image-param-cfg" type="number" min="0" step="0.1"></label>
+              <label>采样方法 <input id="image-param-method" list="image-method-options"></label>
+              <label>Scheduler <input id="image-param-scheduler" list="image-scheduler-options"></label>
+              <label>输出格式 <input id="image-param-format" list="image-format-options"></label>
+            </div>
+            <datalist id="image-method-options"></datalist>
+            <datalist id="image-scheduler-options"></datalist>
+            <datalist id="image-format-options"><option value="png"></option><option value="jpg"></option><option value="webp"></option></datalist>
+            <details class="image-advanced-json">
+              <summary>完整 Base Params JSON</summary>
+              <label>JSON Object <textarea id="image-base-params-json" rows="14" spellcheck="false">{}</textarea></label>
+              <button type="button" class="secondary-button" id="image-base-params-apply">从 JSON 应用到常用参数</button>
+              <p class="form-error" id="image-base-params-error" role="alert"></p>
+            </details>
+          </details>
+
+          <section class="image-item-section" aria-labelledby="image-items-title">
+            <header class="image-section-heading">
+              <div><p class="eyebrow">Prompt 队列</p><h2 id="image-items-title">请求项</h2></div>
+              <div class="button-row">
+                <button type="button" class="secondary-button" id="image-item-add">新增一项</button>
+                <button type="button" class="secondary-button" id="image-bulk-open">批量添加</button>
+                <button type="button" class="primary-button" id="image-batch-run">运行待执行项</button>
+              </div>
+            </header>
+            <div class="image-item-list" id="image-item-list"></div>
+          </section>
+
+          <section class="image-results-section" aria-labelledby="image-results-title">
+            <header class="image-section-heading"><div><p class="eyebrow">共享 Asset</p><h2 id="image-results-title">结果</h2></div></header>
+            <div class="image-result-grid" id="image-result-grid"></div>
+          </section>
+        </section>
 
         <section class="backend-workspace" id="backend-workspace" hidden>
           <div class="backend-toolbar">
@@ -579,6 +645,65 @@
       <input id="llm-session-dialog-mode" type="hidden"><input id="llm-session-dialog-panel" type="hidden">
       <p class="form-error" id="llm-session-dialog-error" role="alert"></p>
       <footer class="dialog-actions"><button type="button" class="secondary-button" data-llm-dialog-close="llm-session-dialog">取消</button><button type="submit" class="primary-button">保存</button></footer>
+    </form>
+  </dialog>
+  <dialog id="image-batch-editor" class="editor-dialog compact-dialog">
+    <form id="image-batch-create-form">
+      <header class="dialog-heading"><div><p class="eyebrow">生图</p><h2>新建批次</h2></div><button type="button" class="text-button" data-image-workspace-close="image-batch-editor">关闭</button></header>
+      <div class="form-grid">
+        <label>标题 <input id="image-new-batch-title" required maxlength="240"></label>
+        <label>文件夹 <input id="image-new-batch-folder" maxlength="240"></label>
+        <label>Provider <select id="image-new-batch-provider" required></select></label>
+        <label>并发 <input id="image-new-batch-concurrency" type="number" min="1" max="16" value="1" required></label>
+      </div>
+      <p class="form-error" id="image-new-batch-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-image-workspace-close="image-batch-editor">取消</button><button type="submit" class="primary-button">创建</button></footer>
+    </form>
+  </dialog>
+  <dialog id="image-bulk-editor" class="editor-dialog compact-dialog">
+    <form id="image-bulk-form">
+      <header class="dialog-heading"><div><p class="eyebrow">批量请求</p><h2>每行一个 Prompt</h2></div><button type="button" class="text-button" data-image-workspace-close="image-bulk-editor">关闭</button></header>
+      <label>提示词 <textarea id="image-bulk-prompts" rows="16" placeholder="portrait of...&#10;landscape of..."></textarea></label>
+      <p class="form-error" id="image-bulk-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-image-workspace-close="image-bulk-editor">取消</button><button type="submit" class="primary-button">加入批次</button></footer>
+    </form>
+  </dialog>
+  <dialog id="image-item-editor" class="editor-dialog image-item-dialog">
+    <form id="image-item-form">
+      <header class="dialog-heading"><div><p class="eyebrow">单次完整请求</p><h2>编辑请求项</h2></div><button type="button" class="text-button" data-image-workspace-close="image-item-editor">关闭</button></header>
+      <input id="image-item-id" type="hidden">
+      <div class="form-grid">
+        <label class="full-width">Prompt <textarea id="image-item-prompt" rows="7"></textarea></label>
+        <label class="full-width">Negative Prompt <textarea id="image-item-negative" rows="4"></textarea></label>
+      </div>
+      <details>
+        <summary>单项参数覆盖</summary>
+        <label>完整 JSON Object <textarea id="image-item-override" rows="10" spellcheck="false">{}</textarea></label>
+      </details>
+      <fieldset class="image-asset-groups">
+        <legend>输入 Assets</legend>
+        <div class="image-asset-group" id="image-item-init" data-asset-group="init"><strong>首图 / Init</strong><div class="image-asset-reference"></div><button type="button" class="secondary-button" data-image-asset-pick="init">选择</button></div>
+        <div class="image-asset-group" id="image-item-refs" data-asset-group="refs"><strong>参考图（多选）</strong><div class="image-asset-reference"></div><button type="button" class="secondary-button" data-image-asset-pick="refs">选择</button></div>
+        <div class="image-asset-group" id="image-item-mask" data-asset-group="mask"><strong>Mask</strong><div class="image-asset-reference"></div><button type="button" class="secondary-button" data-image-asset-pick="mask">选择</button></div>
+        <div class="image-asset-group" id="image-item-control" data-asset-group="control"><strong>Control</strong><div class="image-asset-reference"></div><button type="button" class="secondary-button" data-image-asset-pick="control">选择</button></div>
+        <div class="image-asset-group" id="image-item-ip-adapter" data-asset-group="ip_adapter"><strong>IP Adapter</strong><div class="image-asset-reference"></div><button type="button" class="secondary-button" data-image-asset-pick="ip_adapter">选择</button></div>
+      </fieldset>
+      <details>
+        <summary>Attempt 历史与技术信息</summary>
+        <div id="image-attempt-history"></div>
+        <pre id="image-attempt-technical"></pre>
+      </details>
+      <p class="form-error" id="image-item-error" role="alert"></p>
+      <footer class="dialog-actions image-item-actions">
+        <button type="button" class="text-button" id="image-item-up">上移</button>
+        <button type="button" class="text-button" id="image-item-down">下移</button>
+        <button type="button" class="secondary-button" id="image-item-copy">复制</button>
+        <button type="button" class="text-button danger-text" id="image-item-delete">删除</button>
+        <button type="button" class="secondary-button" id="image-item-cancel">取消任务</button>
+        <button type="button" class="secondary-button" id="image-item-retry">重试</button>
+        <button type="button" class="primary-button" id="image-item-run">运行</button>
+        <button type="submit" class="primary-button">保存请求项</button>
+      </footer>
     </form>
   </dialog>
   <dialog id="llm-panel-dialog" class="editor-dialog compact-dialog">

@@ -765,35 +765,35 @@ Task 8 completion note (2026-08-31): Settings now includes a dependency-free Ima
 - Consumes: image Batch/Item/Attempt/SSE APIs, capabilities, Asset API and active-only picker
 - `app.js` only calls `enter()`/`leave()` from module selection
 
-- [ ] **Step 1: Write failing Image workspace contract test**
+- [x] **Step 1: Write failing Image workspace contract test**
 
 Assert served markup exposes Batch search/folder/new/list; title/folder/Provider/concurrency/save/delete/capabilities; Base Params common fields and advanced JSON; bulk prompts; Item prompt/negative/override/assets/up/down/copy/delete/run/retry/cancel; result grid, active/archive actions, Attempt history and technical details. Assert `images.js` export, Batch APIs, `new EventSource`, `openAssetPicker` and Asset state API.
 
-- [ ] **Step 2: Run contract test and verify RED**
+- [x] **Step 2: Run contract test and verify RED**
 
 Run: `go test ./internal/web -run TestEmbeddedImageWorkspace -count=1 -v`
 
-- [ ] **Step 3: Implement module lifecycle and Batch sidebar**
+- [x] **Step 3: Implement module lifecycle and Batch sidebar**
 
 Capture image sidebar controls before Shell replacement. `enter` loads config and Batches, restores selected Batch, enables shared search and attaches Batch SSE; `leave` closes EventSource and disables shared search. Filter locally by title/folder and render only server-returned canonical objects.
 
-- [ ] **Step 4: Implement Batch and parameter editing**
+- [x] **Step 4: Implement Batch and parameter editing**
 
 Save title/folder/Provider/concurrency/BaseParams explicitly. Common controls read/write the same parsed BaseParams Object at paths `width`, `height`, `seed`, `batch_count`, `sample_params.sample_steps`, `sample_params.guidance.txt_cfg`, `sample_params.sample_method`, `sample_params.scheduler`, `output_format`. Advanced textarea is the complete Object; switching sections reserializes deterministically with two-space indentation. Capabilities may fill datalists/limits or explicitly replace draft defaults only after confirmation.
 
-- [ ] **Step 5: Implement Item editor and active Asset references**
+- [x] **Step 5: Implement Item editor and active Asset references**
 
 Bulk dialog converts trimmed non-empty lines into an explicit Item array. Item Dialog edits prompt, negative, full override Object and five input groups. Call `openAssetPicker` for each; retain existing non-active IDs by fetching their metadata and show each reference with an explicit remove button. Up/down are text buttons calling move API; copy creates a new Item with identical fields after the source.
 
-- [ ] **Step 6: Implement execution, Attempt SSE and result cards**
+- [x] **Step 6: Implement execution, Attempt SSE and result cards**
 
 Run pending Batch or one Item with explicit buttons. Render latest state on each Item and history in collapsed details. Batch EventSource updates by Attempt ID using `textContent`, then refreshes authoritative Batch on terminal state. Cancel only active Attempt; retry creates a new Attempt. Result images use `/api/v1/assets/{id}/content`; active/archive buttons call existing Asset state API and refresh the card.
 
-- [ ] **Step 7: Implement responsive progressive-disclosure styling**
+- [x] **Step 7: Implement responsive progressive-disclosure styling**
 
 Desktop keeps existing left sidebar and uses a wide single Batch column plus responsive result grid. ≤760px makes toolbar/common parameters/Item rows single-column, wraps actions, and uses near-full-screen dialogs. Advanced JSON, history, snapshots and errors remain in `<details>`; there is no drag-only operation.
 
-- [ ] **Step 8: Verify and commit Task 9**
+- [x] **Step 8: Verify and commit Task 9**
 
 Run: `go test ./internal/web ./internal/app -count=1 && git diff --check`
 
@@ -801,6 +801,8 @@ Run: `go test ./internal/web ./internal/app -count=1 && git diff --check`
 git add internal/web
 git commit -m "feat: add image batch workspace"
 ```
+
+Task 9 completion note (2026-08-31): the native browser workspace now manages searchable/foldered image Batches, complete Base Params plus synchronized common controls, bulk and individual Items, five image Asset input groups, ordering/copy/delete actions, Batch and Item execution, retry/cancel, Attempt history, SSE state updates, and active/archive result cards. Responsive layouts keep advanced JSON, snapshots, errors, and history behind progressive disclosure. Request-generation guards, dirty/version tracking, authoritative trailing refreshes, and EventSource identity checks prevent cross-Batch overwrites and unsaved-draft loss; full tests, focused race checks, vet, and focused review pass.
 
 ### Task 10: 文档、完整验证、合并和推送
 

@@ -1,6 +1,7 @@
 import { createLLMConfig } from "/assets/llm-config.js";
 import { createLLMWorkspace } from "/assets/llm.js";
 import { createImageConfig } from "/assets/image-config.js";
+import { createImageWorkspace } from "/assets/images.js";
 
 const modules = {
   llm: {
@@ -57,6 +58,7 @@ const sidebarClose = document.querySelector(".sidebar-close");
 const sidebarScrim = document.querySelector(".sidebar-scrim");
 const emptyState = document.querySelector(".empty-state");
 const llmWorkspace = document.querySelector("#llm-workspace");
+const imageWorkspace = document.querySelector("#image-workspace");
 const backendWorkspace = document.querySelector("#backend-workspace");
 const galleryWorkspace = document.querySelector("#gallery-workspace");
 const knowledgeWorkspace = document.querySelector("#knowledge-workspace");
@@ -64,6 +66,7 @@ const settingsWorkspace = document.querySelector("#settings-workspace");
 const llmConfigWorkspace = createLLMConfig({ readAPIError });
 const imageConfigWorkspace = createImageConfig({ readAPIError });
 const llmWorkspaceController = createLLMWorkspace({ sidebarContent, sidebarSearch: document.querySelector("#sidebar-search"), readAPIError, openAssetPicker });
+const imageWorkspaceController = createImageWorkspace({ sidebarContent, sidebarSearch: document.querySelector("#sidebar-search"), readAPIError, openAssetPicker });
 
 const backendUI = {
   list: document.querySelector("#backend-list"),
@@ -127,8 +130,10 @@ function selectModule(name) {
   const showKnowledge = name === "knowledge";
   const showSettings = name === "settings";
   const showLLM = name === "llm";
-  emptyState.hidden = showLLM || showBackends || showGallery || showKnowledge || showSettings;
+  const showImages = name === "images";
+  emptyState.hidden = showLLM || showImages || showBackends || showGallery || showKnowledge || showSettings;
   llmWorkspace.hidden = !showLLM;
+  imageWorkspace.hidden = !showImages;
   backendWorkspace.hidden = !showBackends;
   galleryWorkspace.hidden = !showGallery;
   knowledgeWorkspace.hidden = !showKnowledge;
@@ -149,6 +154,8 @@ function selectModule(name) {
   }
   if (showLLM) llmWorkspaceController.enter();
   else llmWorkspaceController.leave();
+  if (showImages) imageWorkspaceController.enter();
+  else imageWorkspaceController.leave();
   window.location.hash = name;
   setSidebar(false);
 }
@@ -436,6 +443,7 @@ let previewAssetID = "";
 let pickerAssets = [];
 let selectedPickerAssets = new Set();
 let pickerAllowsMultiple = true;
+let pickerMediaPrefix = "";
 let pickerResolve = null;
 let gallerySearchTimer = null;
 
@@ -672,6 +680,7 @@ async function deletePreviewAsset() {
 async function openAssetPicker(options = {}) {
   if (pickerResolve) closeAssetPicker(null);
   pickerAllowsMultiple = options.multiple !== false;
+  pickerMediaPrefix = options.mediaPrefix ?? "";
   selectedPickerAssets = new Set(options.selected ?? []);
   document.querySelector("#asset-picker-search").value = "";
   document.querySelector("#asset-picker-message").textContent = "正在读取精选资产…";
@@ -680,7 +689,7 @@ async function openAssetPicker(options = {}) {
   try {
     const response = await fetch("/api/v1/assets?state=active");
     if (!response.ok) throw new Error(await readAPIError(response));
-    pickerAssets = (await response.json()).assets ?? [];
+    pickerAssets = ((await response.json()).assets ?? []).filter((item) => !pickerMediaPrefix || item.media_type?.startsWith(pickerMediaPrefix));
     renderAssetPicker();
   } catch (error) {
     document.querySelector("#asset-picker-message").textContent = `读取失败：${error.message}`;

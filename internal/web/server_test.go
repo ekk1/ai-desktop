@@ -339,6 +339,44 @@ func TestEmbeddedGalleryExposesAssetWorkflowAndReusablePicker(t *testing.T) {
 	}
 }
 
+func TestEmbeddedImageWorkspaceExposesBatchItemAndResultWorkflow(t *testing.T) {
+	index := getBody(t, "/")
+	for _, id := range []string{
+		`id="image-sidebar-controls"`, `id="image-batch-folder-filter"`, `id="image-batch-new"`, `id="image-batch-list"`,
+		`id="image-workspace"`, `id="image-batch-title"`, `id="image-batch-folder"`, `id="image-batch-provider"`,
+		`id="image-batch-concurrency"`, `id="image-batch-save"`, `id="image-batch-delete"`, `id="image-batch-capabilities"`,
+		`id="image-param-width"`, `id="image-param-height"`, `id="image-param-seed"`, `id="image-param-batch-count"`,
+		`id="image-param-steps"`, `id="image-param-cfg"`, `id="image-param-method"`, `id="image-param-scheduler"`,
+		`id="image-param-format"`, `id="image-base-params-json"`, `id="image-bulk-prompts"`, `id="image-item-list"`,
+		`id="image-item-editor"`, `id="image-item-prompt"`, `id="image-item-negative"`, `id="image-item-override"`,
+		`id="image-item-init"`, `id="image-item-refs"`, `id="image-item-mask"`, `id="image-item-control"`,
+		`id="image-item-ip-adapter"`, `id="image-item-up"`, `id="image-item-down"`, `id="image-item-copy"`,
+		`id="image-item-delete"`, `id="image-item-run"`, `id="image-item-retry"`, `id="image-item-cancel"`,
+		`id="image-result-grid"`, `id="image-attempt-history"`, `id="image-attempt-technical"`,
+	} {
+		if !strings.Contains(index, id) {
+			t.Errorf("image workspace does not contain %s", id)
+		}
+	}
+
+	script := getBody(t, "/assets/images.js")
+	for _, behavior := range []string{
+		`export function createImageWorkspace`, `/api/v1/images/batches`, `/execute`, `/move`,
+		`new EventSource`, `openAssetPicker`, `/api/v1/assets/`, `/state`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("image workspace script does not contain %s", behavior)
+		}
+	}
+
+	styles := getBody(t, "/assets/styles.css")
+	for _, marker := range []string{`.image-workspace`, `.image-item-card`, `.image-result-grid`, `.image-asset-reference`} {
+		if !strings.Contains(styles, marker) {
+			t.Errorf("image workspace styles do not contain %s", marker)
+		}
+	}
+}
+
 func TestEmbeddedKnowledgeWorkspaceExposesMemoEditor(t *testing.T) {
 	index := getBody(t, "/")
 	for _, id := range []string{
