@@ -252,7 +252,7 @@ git add README.md docs/superpowers/plans/2026-08-30-backend-management.md
 git commit -m "docs: record backend management delivery"
 ```
 
-- [ ] **Step 4: 推送并核对远端**
+- [x] **Step 4: 推送并核对远端**
 
 Run: `git push origin main`
 
