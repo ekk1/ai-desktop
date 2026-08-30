@@ -1,10 +1,8 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -86,19 +84,7 @@ func (handler knowledgeHandler) item(response http.ResponseWriter, request *http
 }
 
 func (handler knowledgeHandler) decode(response http.ResponseWriter, request *http.Request, target any) bool {
-	request.Body = http.MaxBytesReader(response, request.Body, handler.maxBody)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must be one valid JSON object")
-		return false
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must contain one JSON object")
-		return false
-	}
-	return true
+	return decodeStrictJSON(response, request, handler.maxBody, target, false)
 }
 
 func (handler knowledgeHandler) writeError(response http.ResponseWriter, err error) {

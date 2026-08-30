@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -115,6 +116,34 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	if knowledgeResponse.StatusCode != http.StatusOK {
 		t.Fatalf("knowledge list status = %d", knowledgeResponse.StatusCode)
 	}
+	llmConfigResponse, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/llm/config", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = llmConfigResponse.Body.Close()
+	if llmConfigResponse.StatusCode != http.StatusOK {
+		t.Fatalf("LLM config status = %d", llmConfigResponse.StatusCode)
+	}
+	response, err := http.Post(
+		fmt.Sprintf("http://127.0.0.1:%d/api/v1/llm/sessions", port),
+		"application/json", bytes.NewReader([]byte(`{"title":"Lifecycle session","folder":"tests"}`)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var createdSession struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&createdSession); err != nil {
+		_ = response.Body.Close()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusCreated || createdSession.Session.ID == "" {
+		t.Fatalf("create LLM session = %d, %#v", response.StatusCode, createdSession)
+	}
 
 	profile := backend.DefaultProfile()
 	profile.Name = "lifecycle backend"
@@ -123,7 +152,7 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/backends", port), "application/json", bytes.NewReader(encodedProfile))
+	response, err = http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/backends", port), "application/json", bytes.NewReader(encodedProfile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,8 +208,74 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "knowledge", "notes.json")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(dataDir, "sessions", createdSession.Session.ID, "workspace.json")); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := config.Load(filepath.Join(dataDir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.SchemaVersion != 2 {
+		t.Fatalf("config schema = %d, want 2", configuration.SchemaVersion)
+	}
 	if err := syscall.Kill(started.PID, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("managed backend PID %d survived app shutdown: %v", started.PID, err)
+	}
+}
+
+func TestRuntimeShutdownCancelsActiveLLMRun(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		select {
+		case <-request.Context().Done():
+		case <-releaseHandler:
+		}
+	}))
+	defer providerServer.Close()
+	defer close(releaseHandler)
+	cfg := config.Default()
+	cfg.LLM.Providers[0].URL = providerServer.URL
+	runtime, err := newRuntime(t.TempDir(), cfg, "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/llm/sessions", bytes.NewReader([]byte(`{"title":"shutdown"}`)))
+	createResponse := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(createResponse, createRequest)
+	var workspace struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+		Panels []struct {
+			ID string `json:"id"`
+		} `json:"panels"`
+	}
+	if err := json.NewDecoder(createResponse.Body).Decode(&workspace); err != nil || len(workspace.Panels) != 1 {
+		t.Fatalf("workspace = %#v, error = %v", workspace, err)
+	}
+	executeBody := fmt.Sprintf(`{"panel_id":%q,"quick_path_ids":["local"]}`, workspace.Panels[0].ID)
+	executeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/llm/sessions/"+workspace.Session.ID+"/execute", bytes.NewReader([]byte(executeBody)))
+	executeResponse := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(executeResponse, executeRequest)
+	var accepted struct {
+		Runs []struct {
+			ID string `json:"id"`
+		} `json:"runs"`
+	}
+	if err := json.NewDecoder(executeResponse.Body).Decode(&accepted); err != nil || len(accepted.Runs) != 1 {
+		t.Fatalf("accepted = %#v, error = %v", accepted, err)
+	}
+	<-requestStarted
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runtime.shutdownManagers(shutdownContext); err != nil {
+		t.Fatal(err)
+	}
+	run, exists := runtime.llmManager.Get(accepted.Runs[0].ID)
+	if !exists || run.State != "cancelled" {
+		t.Fatalf("run after shutdown = %#v, exists = %v", run, exists)
 	}
 }
 

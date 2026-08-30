@@ -169,6 +169,15 @@ func TestServiceSynchronizesSubtreeForkAndRevisionReferences(t *testing.T) {
 	}
 	assertPanelReference(t, assets, first.ID, forkRoot.ID, true)
 	assertPanelReference(t, assets, second.ID, forkRoot.ID, false)
+	if err := service.DeleteSession(forked.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertPanelReference(t, assets, first.ID, forkRoot.ID, false)
+	assertPanelReference(t, assets, first.ID, forked.Panels[1].ID, false)
+	assertPanelReference(t, assets, second.ID, forked.Panels[2].ID, false)
+	if _, exists := service.Get(forked.Session.ID); exists {
+		t.Fatal("deleted session still exists")
+	}
 }
 
 func newSessionServiceFixture(t *testing.T) (*Service, *asset.Repository) {

@@ -578,31 +578,31 @@ git commit -m "feat: execute confirmed Exa searches"
 - Produces every endpoint in Design §9 with existing Error Envelope conventions
 - Changes app runtime to own both `backend.Manager` and `llm.Manager`, shutting both down on every exit path
 
-- [ ] **Step 1: Write failing config and Session API tests**
+- [x] **Step 1: Write failing config and Session API tests**
 
 Test full `GET/PUT /api/v1/llm/config`, llama preset insertion, Session CRUD/filter/fork, Panel CRUD/restore, server-computed `exa_candidate`, strict unknown fields, malformed IDs and unknown resources using real temp repositories.
 
-- [ ] **Step 2: Run API tests and verify RED**
+- [x] **Step 2: Run API tests and verify RED**
 
 Run: `go test ./internal/web -run 'TestLLM(Config|Session|Panel)' -count=1 -v`
 
-- [ ] **Step 3: Implement focused Handler files and shared strict decoder**
+- [x] **Step 3: Implement focused Handler files and shared strict decoder**
 
 Reuse one `decodeStrictJSON(response,request,max,target)` helper from Asset/Knowledge handlers, preserving their behavior. Do not expose disk paths or mutable Repository pointers.
 
-- [ ] **Step 4: Write failing Run SSE/cancel/Exa API tests**
+- [x] **Step 4: Write failing Run SSE/cancel/Exa API tests**
 
 Use a streaming `httptest.Server`; assert execute returns `202`, SSE emits snapshot/chunk/state JSON, cancel is idempotent for completed Run, and Exa only works on a detected Panel.
 
-- [ ] **Step 5: Implement Run and Exa routes**
+- [x] **Step 5: Implement Run and Exa routes**
 
 SSE uses `text/event-stream`, immediate flush, heartbeat comments, request Context unsubscribe, and no Provider secret. Execute accepts `{panel_id,quick_path_ids}` only.
 
-- [ ] **Step 6: Write and implement app lifecycle tests**
+- [x] **Step 6: Write and implement app lifecycle tests**
 
 Extend the real `Run` test to assert config Schema 2, sessions directory, LLM APIs and cancellation on shutdown. Replace the current tuple return with an unexported runtime struct so both managers are always reachable.
 
-- [ ] **Step 7: Verify and commit Task 8**
+- [x] **Step 7: Verify and commit Task 8**
 
 Run: `go test -race ./internal/web ./internal/app ./internal/llm -count=1`
 

@@ -237,22 +237,7 @@ func (handler backendHandler) clearLog(response http.ResponseWriter, request *ht
 }
 
 func (handler backendHandler) decode(response http.ResponseWriter, request *http.Request, target any, allowEmpty bool) bool {
-	request.Body = http.MaxBytesReader(response, request.Body, handler.maxBody)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		if allowEmpty && errors.Is(err, io.EOF) {
-			return true
-		}
-		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must be one valid JSON object")
-		return false
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must contain one JSON object")
-		return false
-	}
-	return true
+	return decodeStrictJSON(response, request, handler.maxBody, target, allowEmpty)
 }
 
 func (handler backendHandler) methodNotAllowed(response http.ResponseWriter, allow string) {

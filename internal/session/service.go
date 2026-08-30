@@ -57,6 +57,29 @@ func (service *Service) UpdateSession(sessionID string, input UpdateSessionInput
 	return service.repository.UpdateSession(sessionID, input)
 }
 
+func (service *Service) DeleteSession(sessionID string) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	before, exists := service.repository.Get(sessionID)
+	if !exists {
+		return ErrSessionNotFound
+	}
+	changes := make([]assetReferenceChange, 0)
+	for _, panel := range before.Panels {
+		changes = append(changes, changesForPanel(panel)...)
+	}
+	if err := service.repository.deleteWorkspace(sessionID); err != nil {
+		return err
+	}
+	completed, err := service.removeReferencesUntilError(changes)
+	if err == nil {
+		return nil
+	}
+	rollbackErrors := []error{service.repository.restoreWorkspace(before)}
+	rollbackErrors = append(rollbackErrors, service.addReferencesCollectErrors(completed)...)
+	return joinMutationError(err, rollbackErrors)
+}
+
 func (service *Service) CreatePanel(sessionID string, input CreatePanelInput) (Panel, error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()

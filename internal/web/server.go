@@ -3,6 +3,8 @@ package web
 import (
 	"embed"
 	"encoding/json"
+	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 
@@ -10,6 +12,8 @@ import (
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 	"github.com/ekk1/ai-desktop/internal/knowledge"
+	"github.com/ekk1/ai-desktop/internal/llm"
+	"github.com/ekk1/ai-desktop/internal/session"
 )
 
 //go:embed static/*
@@ -23,6 +27,10 @@ type Options struct {
 	BackendManager    *backend.Manager
 	AssetRepository   *asset.Repository
 	KnowledgeService  *knowledge.Service
+	ConfigRepository  *config.Repository
+	SessionService    *session.Service
+	LLMManager        *llm.Manager
+	ExaService        *llm.ExaService
 }
 
 type errorEnvelope struct {
@@ -76,6 +84,29 @@ func NewHandler(options Options) http.Handler {
 		knowledgeAPI := knowledgeHandler{service: options.KnowledgeService, maxBody: options.Config.MaxUploadBytes}
 		mux.HandleFunc("/api/v1/knowledge", knowledgeAPI.serve)
 		mux.HandleFunc("/api/v1/knowledge/", knowledgeAPI.serve)
+	}
+	if options.ConfigRepository != nil {
+		configurationAPI := llmConfigHandler{repository: options.ConfigRepository, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/llm/config", configurationAPI.serve)
+		mux.HandleFunc("/api/v1/llm/providers/", configurationAPI.serve)
+	}
+	if options.SessionService != nil {
+		var runAPI *llmRunHandler
+		if options.LLMManager != nil {
+			handler := llmRunHandler{manager: options.LLMManager, maxBody: options.Config.MaxUploadBytes}
+			runAPI = &handler
+			mux.HandleFunc("/api/v1/llm/runs/", handler.serve)
+		}
+		var exaAPI *llmExaHandler
+		if options.ExaService != nil {
+			handler := llmExaHandler{service: options.ExaService, maxBody: options.Config.MaxUploadBytes}
+			exaAPI = &handler
+		}
+		sessionAPI := llmSessionHandler{
+			service: options.SessionService, maxBody: options.Config.MaxUploadBytes, runs: runAPI, exa: exaAPI,
+		}
+		mux.HandleFunc("/api/v1/llm/sessions", sessionAPI.serve)
+		mux.HandleFunc("/api/v1/llm/sessions/", sessionAPI.serve)
 	}
 
 	serveEmbeddedFile(mux, "/assets/styles.css", "static/styles.css", "text/css; charset=utf-8")
@@ -149,4 +180,28 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 	response.WriteHeader(status)
 	_ = json.NewEncoder(response).Encode(value)
+}
+
+func decodeStrictJSON(response http.ResponseWriter, request *http.Request, maxBody int64, target any, allowEmpty bool) bool {
+	request.Body = http.MaxBytesReader(response, request.Body, maxBody)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		if allowEmpty && errors.Is(err, io.EOF) {
+			return true
+		}
+		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must be one valid JSON object")
+		return false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must contain one JSON object")
+		return false
+	}
+	return true
+}
+
+func methodNotAllowed(response http.ResponseWriter, allow string) {
+	response.Header().Set("Allow", allow)
+	writeAPIError(response, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 }
