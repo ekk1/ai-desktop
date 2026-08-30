@@ -298,7 +298,7 @@ git commit -m "feat: protect LLM panel assets"
 - Produces: `llm.NewAssembler(knowledgeService, assetRepository)`
 - Produces: `Assembler.Build(workspace, panelID, provider, quickPath) (provider.PreparedRequest, llm.Snapshot, error)`
 
-- [ ] **Step 1: Write failing JSON safety and merge tests**
+- [x] **Step 1: Write failing JSON safety and merge tests**
 
 ```go
 func TestRenderJSONEncodesContentAndMergesQuickParams(t *testing.T) {
@@ -320,15 +320,15 @@ func TestRenderRejectsPlaceholderInsideJSONStringAndHeaderNewline(t *testing.T) 
 }
 ```
 
-- [ ] **Step 2: Run template tests and verify RED**
+- [x] **Step 2: Run template tests and verify RED**
 
 Run: `go test ./internal/provider -run TestRender -count=1 -v`
 
-- [ ] **Step 3: Implement token-aware placeholder replacement**
+- [x] **Step 3: Implement token-aware placeholder replacement**
 
 Recognize only the exact variables from the design. Replace `_JSON` with `json.Marshal` output, `${API_KEY}` only in Header values, validate one top-level Object, shallow-merge Params, and re-encode. Produce both real Headers and redacted snapshot Headers.
 
-- [ ] **Step 4: Write failing assembler ordering/Data URL/snapshot tests**
+- [x] **Step 4: Write failing assembler ordering/Data URL/snapshot tests**
 
 ```go
 func TestAssemblerUsesCurrentIncludedPathAndKnowledgeOrder(t *testing.T) {
@@ -353,11 +353,11 @@ func TestAssemblerRejectsNonImageAndOversizedAssetsBeforeSnapshot(t *testing.T) 
 }
 ```
 
-- [ ] **Step 5: Implement immutable Snapshot assembly**
+- [x] **Step 5: Implement immutable Snapshot assembly**
 
 Copy all Panel, knowledge and Asset metadata; join content with exactly two newlines; encode image content; reject missing records and unsupported media; render PreparedRequest; Snapshot stores final Body and only redacted Headers.
 
-- [ ] **Step 6: Verify and commit Task 4**
+- [x] **Step 6: Verify and commit Task 4**
 
 Run: `go test ./internal/provider ./internal/llm -count=1 -v`
 
