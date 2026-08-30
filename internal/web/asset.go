@@ -8,7 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 
@@ -132,16 +132,22 @@ func (handler assetHandler) export(response http.ResponseWriter, request *http.R
 }
 
 func uniqueArchiveName(displayName string, used map[string]int) string {
-	name := filepath.Base(strings.TrimSpace(displayName))
+	name := path.Base(strings.ReplaceAll(strings.TrimSpace(displayName), `\`, "/"))
 	if name == "" || name == "." {
 		name = "asset"
 	}
+	name = strings.Map(func(character rune) rune {
+		if character < 0x20 || character == 0x7f {
+			return '_'
+		}
+		return character
+	}, name)
 	count := used[name]
 	used[name] = count + 1
 	if count == 0 {
 		return name
 	}
-	extension := filepath.Ext(name)
+	extension := path.Ext(name)
 	base := strings.TrimSuffix(name, extension)
 	for {
 		count++

@@ -60,8 +60,8 @@ func uniqueStrings(values []string) []string {
 
 func cloneNote(source Note) Note {
 	clone := source
-	clone.Tags = append([]string(nil), source.Tags...)
-	clone.AssetIDs = append([]string(nil), source.AssetIDs...)
+	clone.Tags = append([]string{}, source.Tags...)
+	clone.AssetIDs = append([]string{}, source.AssetIDs...)
 	return clone
 }
 

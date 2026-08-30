@@ -98,7 +98,11 @@ func TestRepositoryRequiresTitleButAllowsEmptyContent(t *testing.T) {
 	if _, err := repository.Create(Input{Title: "  "}); err == nil {
 		t.Fatal("empty title was accepted")
 	}
-	if _, err := repository.Create(Input{Title: "Reminder", Content: ""}); err != nil {
+	created, err := repository.Create(Input{Title: "Reminder", Content: ""})
+	if err != nil {
 		t.Fatalf("empty content rejected: %v", err)
+	}
+	if created.Tags == nil || created.AssetIDs == nil {
+		t.Fatalf("empty collections = tags %#v, assets %#v; want non-nil empty slices", created.Tags, created.AssetIDs)
 	}
 }

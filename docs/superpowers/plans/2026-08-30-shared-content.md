@@ -201,9 +201,9 @@ git commit -m "feat: add knowledge memo workspace"
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-08-30-shared-content.md`
 
-- [ ] **Step 1: README 增加资产状态、导入目录和知识库说明**
+- [x] **Step 1: README 增加资产状态、导入目录和知识库说明**
 
-- [ ] **Step 2: 执行完整验证**
+- [x] **Step 2: 执行完整验证**
 
 Run: `gofmt -w cmd internal && go vet ./... && go test ./... -count=1`
 
@@ -211,7 +211,7 @@ Run: `go test -race ./internal/asset ./internal/knowledge ./internal/web ./inter
 
 Run: `go build ./cmd/ai-workbench && git diff --check`
 
-- [ ] **Step 3: 更新计划、提交并推送**
+- [x] **Step 3: 更新计划、提交并推送**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-08-30-shared-content.md
@@ -219,4 +219,4 @@ git commit -m "docs: record shared content delivery"
 git push origin main
 ```
 
-- [ ] **Step 4: 核对 `HEAD == origin/main` 且工作树干净**
+- [x] **Step 4: 核对 `HEAD == origin/main` 且工作树干净**

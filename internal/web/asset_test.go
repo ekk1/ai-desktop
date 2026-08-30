@@ -91,6 +91,23 @@ func TestAssetExportReturnsSelectedFilesAsZIP(t *testing.T) {
 	}
 }
 
+func TestAssetExportSanitizesCrossPlatformArchivePaths(t *testing.T) {
+	handler, _ := newAssetHandler(t)
+	item := uploadAsset(t, handler, `..\outside.txt`, "text/plain", []byte("safe"))
+
+	response := doJSON(t, handler, http.MethodPost, "/api/v1/assets/export", map[string]any{"asset_ids": []string{item.ID}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("export status = %d: %s", response.Code, response.Body.String())
+	}
+	archive, err := zip.NewReader(bytes.NewReader(response.Body.Bytes()), int64(response.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive.File) != 1 || archive.File[0].Name != "outside.txt" {
+		t.Fatalf("zip entries = %#v, want outside.txt", archive.File)
+	}
+}
+
 func TestAssetUploadStateMetadataAndContent(t *testing.T) {
 	handler, repository := newAssetHandler(t)
 	contents := webPNGFixture(t)
