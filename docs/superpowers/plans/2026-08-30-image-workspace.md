@@ -621,7 +621,7 @@ Task 6 completion note (2026-08-31): the Manager now serializes worker/cancel re
 - App owns `imagegen.Manager` and includes it in graceful shutdown
 - Web `Options` gains Config repository, Image Service/Manager and sdcpp Client capability dependencies
 
-- [ ] **Step 1: Write failing image config and capabilities API tests**
+- [x] **Step 1: Write failing image config and capabilities API tests**
 
 ```go
 func TestImageConfigAPIUpdatesCompleteConfiguration(t *testing.T) {
@@ -634,27 +634,27 @@ func TestImageConfigAPIUpdatesCompleteConfiguration(t *testing.T) {
 
 Add GET, strict unknown field, invalid provider, missing capability Provider, disabled Provider and proxied capabilities response tests.
 
-- [ ] **Step 2: Run Config/capabilities API tests and verify RED**
+- [x] **Step 2: Run Config/capabilities API tests and verify RED**
 
 Run: `go test ./internal/web -run 'TestImage(Config|Capabilities)' -count=1 -v`
 
-- [ ] **Step 3: Implement Config and capabilities handlers**
+- [x] **Step 3: Implement Config and capabilities handlers**
 
 Use existing `decodeStrictJSON` and Error Envelope. Capabilities handler reads the latest config, finds an enabled Provider and calls injected `sdcpp.Client`; map timeout to 504, non-2xx to 502 and config errors to 400/404.
 
-- [ ] **Step 4: Write failing Batch/Item CRUD API tests**
+- [x] **Step 4: Write failing Batch/Item CRUD API tests**
 
 Cover collection GET/POST, folder/query filtering, Batch GET/PUT/DELETE, multi-Item POST, Item PUT/DELETE and `{"direction":-1|1}` move. Assert unknown JSON fields fail and response JSON returns canonical Order plus archive input Asset summaries.
 
-- [ ] **Step 5: Run Batch/Item CRUD API tests and verify RED**
+- [x] **Step 5: Run Batch/Item CRUD API tests and verify RED**
 
 Run: `go test ./internal/web -run 'TestImage(Batch|Item)' -count=1 -v`
 
-- [ ] **Step 6: Implement Batch and Item handlers**
+- [x] **Step 6: Implement Batch and Item handlers**
 
 Validate all path IDs as 32-hex. Return 201 for create, 200 for updates, 204 for deletes. Map active Attempt conflicts to 409, missing resources to 404, invalid params/reference to 400 and storage errors to 500 without leaking paths.
 
-- [ ] **Step 7: Write failing execute/cancel/SSE tests**
+- [x] **Step 7: Write failing execute/cancel/SSE tests**
 
 ```go
 func TestImageAttemptSSEWritesSnapshotAndState(t *testing.T) {
@@ -677,27 +677,27 @@ func TestImageAttemptSSEWritesSnapshotAndState(t *testing.T) {
 
 Add Batch execute 202, Item retry 202, duplicate active 409, Attempt GET, cancel accepted/terminal idempotence, SSE heartbeat and disconnected request cleanup.
 
-- [ ] **Step 8: Run execute/cancel/SSE tests and verify RED**
+- [x] **Step 8: Run execute/cancel/SSE tests and verify RED**
 
 Run: `go test ./internal/web -run 'TestImage(Execute|Attempt|Cancel)' -count=1 -v`
 
-- [ ] **Step 9: Implement execute, Attempt and SSE handlers**
+- [x] **Step 9: Implement execute, Attempt and SSE handlers**
 
 Batch execute response is `{"attempts":[...]}`. SSE route sets no-cache/X-Accel headers, writes one event per `AttemptEvent`, heartbeat every 15 seconds and exits on request Context. JSON never includes output Base64 because Attempt stores only Asset IDs.
 
-- [ ] **Step 10: Write failing app assembly and shutdown tests**
+- [x] **Step 10: Write failing app assembly and shutdown tests**
 
 Extend the real app lifecycle fixture to assert `<data-dir>/images/batches` creation, default image config API, Batch creation persistence, activity cancelled during shutdown, and queued/polling fixture reopened as interrupted.
 
-- [ ] **Step 11: Run app image lifecycle tests and verify RED**
+- [x] **Step 11: Run app image lifecycle tests and verify RED**
 
 Run: `go test ./internal/app -run 'TestApplication(Image|ShutdownCancelsImage)' -count=1 -v`
 
-- [ ] **Step 12: Wire application runtime and shutdown order**
+- [x] **Step 12: Wire application runtime and shutdown order**
 
 Open `imagegen.Repository` under `images/batches`, wrap Service, construct Assembler and Manager, pass dependencies into Web. Add `imageManager` to `applicationRuntime`; shutdown joins image Manager, LLM Manager and backend Manager within the existing timeout.
 
-- [ ] **Step 13: Verify and commit Task 7**
+- [x] **Step 13: Verify and commit Task 7**
 
 Run: `gofmt -w internal/web internal/app && go test -race ./internal/web ./internal/app ./internal/imagegen -count=1 && git diff --check`
 
@@ -705,6 +705,8 @@ Run: `gofmt -w internal/web internal/app && go test -race ./internal/web ./inter
 git add internal/web internal/app
 git commit -m "feat: expose image generation API"
 ```
+
+Task 7 completion note (2026-08-31): the native API now covers image Provider configuration/capabilities, Batch and Item CRUD, execution, Attempt lookup/cancellation, and Batch SSE. Batch detail includes Provider availability and referenced Asset summaries; application shutdown closes SSE and stops HTTP plus all managers concurrently within one deadline. Strict Object decoding, upstream status mapping, storage-error redaction, active-delete protection, and app persistence/shutdown behavior are covered by tests and focused review.
 
 ### Task 8: 原生 Image Provider 配置界面
 

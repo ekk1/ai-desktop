@@ -130,6 +130,21 @@ func TestServiceDeleteItemAndBatchReleaseAllReferences(t *testing.T) {
 	assertReference(t, fixture.assets, second.ID, "image_item", items[1].ID, false)
 }
 
+func TestServiceRejectsDeletingActiveItemOrBatch(t *testing.T) {
+	fixture := newServiceFixture(t)
+	batch, _ := fixture.service.CreateBatch(validBatchInput())
+	items, _ := fixture.service.CreateItems(batch.ID, []CreateItemInput{{Prompt: "one"}})
+	if _, err := fixture.service.CreateAttempt(batch.ID, items[0].ID, CreateAttemptInput{State: AttemptQueued, Snapshot: validSnapshot()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.service.DeleteItem(batch.ID, items[0].ID); !errors.Is(err, ErrActiveAttempt) {
+		t.Fatalf("delete active item error = %v", err)
+	}
+	if err := fixture.service.DeleteBatch(batch.ID); !errors.Is(err, ErrActiveAttempt) {
+		t.Fatalf("delete active batch error = %v", err)
+	}
+}
+
 func TestServiceRollsBackWhenReferenceSynchronizationFails(t *testing.T) {
 	fixture := newServiceFixture(t)
 	input := importImage(t, fixture.assets, "input.png")
@@ -278,7 +293,13 @@ func TestServiceRemovesResultReferenceWhenPersistenceFails(t *testing.T) {
 func TestServiceDeleteItemReleasesAttemptResultReferences(t *testing.T) {
 	fixture, batchID, itemID, attemptID := resultServiceFixture(t)
 	result := importImage(t, fixture.assets, "result.png")
-	if _, err := fixture.service.AttachResult(batchID, itemID, attemptID, result.ID); err != nil {
+	attached, err := fixture.service.AttachResult(batchID, itemID, attemptID, result.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.UpdateAttempt(batchID, itemID, attemptID, UpdateAttemptInput{
+		State: AttemptSucceeded, ResultAssetIDs: attached.ResultAssetIDs,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.service.DeleteItem(batchID, itemID); err != nil {

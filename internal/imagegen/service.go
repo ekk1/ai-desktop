@@ -70,6 +70,13 @@ func (service *Service) DeleteBatch(batchID string) error {
 	if !ok {
 		return ErrBatchNotFound
 	}
+	for _, item := range before.Items {
+		for _, attempt := range item.Attempts {
+			if activeAttemptState(attempt.State) {
+				return ErrActiveAttempt
+			}
+		}
+	}
 	changes := changesForBatch(before, false)
 	completed, err := service.applyChanges(changes)
 	if err != nil {
@@ -140,6 +147,11 @@ func (service *Service) DeleteItem(batchID, itemID string) error {
 	_, item, err := service.batchItem(batchID, itemID)
 	if err != nil {
 		return err
+	}
+	for _, attempt := range item.Attempts {
+		if activeAttemptState(attempt.State) {
+			return ErrActiveAttempt
+		}
 	}
 	changes := changesForItem(item, false)
 	completed, err := service.applyChanges(changes)

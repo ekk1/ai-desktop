@@ -8,16 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 	"github.com/ekk1/ai-desktop/internal/exa"
+	"github.com/ekk1/ai-desktop/internal/imagegen"
 	"github.com/ekk1/ai-desktop/internal/instance"
 	"github.com/ekk1/ai-desktop/internal/knowledge"
 	"github.com/ekk1/ai-desktop/internal/llm"
 	"github.com/ekk1/ai-desktop/internal/provider"
+	"github.com/ekk1/ai-desktop/internal/sdcpp"
 	"github.com/ekk1/ai-desktop/internal/session"
 	"github.com/ekk1/ai-desktop/internal/web"
 )
@@ -40,6 +43,7 @@ type applicationRuntime struct {
 	server         *http.Server
 	backendManager *backend.Manager
 	llmManager     *llm.Manager
+	imageManager   *imagegen.Manager
 }
 
 func newRuntime(dataDir string, cfg config.Config, version string, portOverride int) (*applicationRuntime, error) {
@@ -70,6 +74,13 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 	if err != nil {
 		return nil, fmt.Errorf("open asset repository: %w", err)
 	}
+	imageRepository, err := imagegen.OpenRepository(filepath.Join(dataDir, "images", "batches"))
+	if err != nil {
+		return nil, fmt.Errorf("open image batches: %w", err)
+	}
+	imageService := imagegen.NewService(imageRepository, assetRepository)
+	imageClient := sdcpp.Client{}
+	imageManager := imagegen.NewManager(configRepository, imageService, imagegen.NewAssembler(assetRepository), assetRepository, imageClient)
 	knowledgeRepository, err := knowledge.OpenRepository(filepath.Join(dataDir, "knowledge", "notes.json"))
 	if err != nil {
 		return nil, fmt.Errorf("open knowledge repository: %w", err)
@@ -104,15 +115,40 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 			SessionService:    sessionService,
 			LLMManager:        llmManager,
 			ExaService:        exaService,
+			ImageCapabilities: imageClient,
+			ImageService:      imageService,
+			ImageManager:      imageManager,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	return &applicationRuntime{server: server, backendManager: manager, llmManager: llmManager}, nil
+	return &applicationRuntime{server: server, backendManager: manager, llmManager: llmManager, imageManager: imageManager}, nil
 }
 
 func (runtime *applicationRuntime) shutdownManagers(ctx context.Context) error {
-	return errors.Join(runtime.llmManager.Shutdown(ctx), runtime.backendManager.Shutdown(ctx))
+	shutdowns := []func(context.Context) error{
+		runtime.imageManager.Shutdown,
+		runtime.llmManager.Shutdown,
+		runtime.backendManager.Shutdown,
+	}
+	errorsFound := make(chan error, len(shutdowns))
+	var wait sync.WaitGroup
+	for _, shutdown := range shutdowns {
+		wait.Add(1)
+		go func(shutdown func(context.Context) error) {
+			defer wait.Done()
+			if err := shutdown(ctx); err != nil {
+				errorsFound <- err
+			}
+		}(shutdown)
+	}
+	wait.Wait()
+	close(errorsFound)
+	var failures []error
+	for err := range errorsFound {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -159,9 +195,13 @@ func Run(ctx context.Context, options Options) error {
 	case <-ctx.Done():
 		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
-		shutdownErr := server.Shutdown(shutdownContext)
+		shutdownResult := make(chan error, 1)
+		managerResult := make(chan error, 1)
+		go func() { shutdownResult <- server.Shutdown(shutdownContext) }()
+		go func() { managerResult <- runtime.shutdownManagers(shutdownContext) }()
+		shutdownErr := <-shutdownResult
 		serveErr := <-serverResult
-		managerErr := runtime.shutdownManagers(shutdownContext)
+		managerErr := <-managerResult
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		}

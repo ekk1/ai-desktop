@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -123,6 +126,32 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	_ = llmConfigResponse.Body.Close()
 	if llmConfigResponse.StatusCode != http.StatusOK {
 		t.Fatalf("LLM config status = %d", llmConfigResponse.StatusCode)
+	}
+	imageBatchResponse, err := http.Post(
+		fmt.Sprintf("http://127.0.0.1:%d/api/v1/images/batches", port),
+		"application/json", bytes.NewReader([]byte(`{"title":"SSE lifecycle","provider_id":"sdcpp-local","concurrency":1,"base_params":{}}`)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imageBatch struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(imageBatchResponse.Body).Decode(&imageBatch); err != nil {
+		_ = imageBatchResponse.Body.Close()
+		t.Fatal(err)
+	}
+	_ = imageBatchResponse.Body.Close()
+	if imageBatchResponse.StatusCode != http.StatusCreated || imageBatch.ID == "" {
+		t.Fatalf("create image batch = %d, %#v", imageBatchResponse.StatusCode, imageBatch)
+	}
+	imageEvents, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/images/batches/%s/events", port, imageBatch.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer imageEvents.Body.Close()
+	if imageEvents.StatusCode != http.StatusOK || !strings.HasPrefix(imageEvents.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("image events status = %d, headers = %#v", imageEvents.StatusCode, imageEvents.Header)
 	}
 	response, err := http.Post(
 		fmt.Sprintf("http://127.0.0.1:%d/api/v1/llm/sessions", port),
@@ -276,6 +305,81 @@ func TestRuntimeShutdownCancelsActiveLLMRun(t *testing.T) {
 	run, exists := runtime.llmManager.Get(accepted.Runs[0].ID)
 	if !exists || run.State != "cancelled" {
 		t.Fatalf("run after shutdown = %#v, exists = %v", run, exists)
+	}
+}
+
+func TestApplicationImageLifecyclePersistsBatchAndCancelsActiveAttempt(t *testing.T) {
+	jobStarted := make(chan struct{})
+	var startOnce sync.Once
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/sdcpp/v1/img_gen":
+			response.Header().Set("Content-Type", "application/json")
+			response.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(response, `{"id":"job-app","kind":"img_gen","status":"queued","created":1,"poll_url":"/sdcpp/v1/jobs/job-app"}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/sdcpp/v1/jobs/job-app":
+			startOnce.Do(func() { close(jobStarted) })
+			<-request.Context().Done()
+		case request.Method == http.MethodPost && request.URL.Path == "/sdcpp/v1/jobs/job-app/cancel":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(response, `{}`)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer provider.Close()
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Images.Providers[0].BaseURL = provider.URL
+	cfg.Images.Providers[0].PollIntervalMilliseconds = 100
+	runtime, err := newRuntime(dataDir, cfg, "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configResponse := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(configResponse, httptest.NewRequest(http.MethodGet, "/api/v1/images/config", nil))
+	if configResponse.Code != http.StatusOK || !strings.Contains(configResponse.Body.String(), `"id":"sdcpp-local"`) {
+		t.Fatalf("config status = %d, body = %s", configResponse.Code, configResponse.Body.String())
+	}
+	create := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/v1/images/batches", bytes.NewReader([]byte(`{"title":"App image","provider_id":"sdcpp-local","concurrency":1,"base_params":{"output_format":"png"}}`))))
+	var batch struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&batch); create.Code != http.StatusCreated || err != nil || batch.ID == "" {
+		t.Fatalf("create status = %d, body = %s, error = %v", create.Code, create.Body.String(), err)
+	}
+	items := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(items, httptest.NewRequest(http.MethodPost, "/api/v1/images/batches/"+batch.ID+"/items", bytes.NewReader([]byte(`{"items":[{"prompt":"one"}]}`))))
+	if items.Code != http.StatusCreated {
+		t.Fatalf("items status = %d, body = %s", items.Code, items.Body.String())
+	}
+	execute := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(execute, httptest.NewRequest(http.MethodPost, "/api/v1/images/batches/"+batch.ID+"/execute", bytes.NewReader([]byte(`{}`))))
+	var accepted struct {
+		Attempts []struct {
+			ID string `json:"id"`
+		} `json:"attempts"`
+	}
+	if err := json.NewDecoder(execute.Body).Decode(&accepted); execute.Code != http.StatusAccepted || err != nil || len(accepted.Attempts) != 1 {
+		t.Fatalf("execute status = %d, body = %s, error = %v", execute.Code, execute.Body.String(), err)
+	}
+	select {
+	case <-jobStarted:
+	case <-time.After(time.Second):
+		t.Fatal("image job polling did not start")
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runtime.shutdownManagers(shutdownContext); err != nil {
+		t.Fatal(err)
+	}
+	attempt, ok := runtime.imageManager.GetAttempt(accepted.Attempts[0].ID)
+	if !ok || attempt.State != "cancelled" {
+		t.Fatalf("attempt = %#v, exists = %v", attempt, ok)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "images", "batches", batch.ID, "batch.json")); err != nil {
+		t.Fatal(err)
 	}
 }
 

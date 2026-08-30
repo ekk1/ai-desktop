@@ -331,6 +331,10 @@ func (manager *Manager) SubscribeBatch(batchID string) (<-chan AttemptEvent, fun
 		return nil, nil, ErrBatchNotFound
 	}
 	manager.mu.Lock()
+	if !manager.accepting {
+		manager.mu.Unlock()
+		return nil, nil, ErrImageManagerClosed
+	}
 	batch, ok := manager.service.Get(batchID)
 	if !ok {
 		manager.mu.Unlock()
@@ -376,6 +380,13 @@ func (manager *Manager) SubscribeBatch(batchID string) (<-chan AttemptEvent, fun
 func (manager *Manager) Shutdown(ctx context.Context) error {
 	manager.mu.Lock()
 	manager.accepting = false
+	for batchID, subscribers := range manager.subscribers {
+		for subscriberID, stream := range subscribers {
+			delete(subscribers, subscriberID)
+			close(stream)
+		}
+		delete(manager.subscribers, batchID)
+	}
 	manager.mu.Unlock()
 	startsFinished := make(chan struct{})
 	go func() {

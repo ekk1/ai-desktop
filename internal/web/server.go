@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
+	"github.com/ekk1/ai-desktop/internal/imagegen"
 	"github.com/ekk1/ai-desktop/internal/knowledge"
 	"github.com/ekk1/ai-desktop/internal/llm"
 	"github.com/ekk1/ai-desktop/internal/session"
@@ -31,6 +33,9 @@ type Options struct {
 	SessionService    *session.Service
 	LLMManager        *llm.Manager
 	ExaService        *llm.ExaService
+	ImageCapabilities ImageCapabilitiesClient
+	ImageService      *imagegen.Service
+	ImageManager      *imagegen.Manager
 }
 
 type errorEnvelope struct {
@@ -80,6 +85,18 @@ func NewHandler(options Options) http.Handler {
 		mux.HandleFunc("/api/v1/assets", assetAPI.serve)
 		mux.HandleFunc("/api/v1/assets/", assetAPI.serve)
 	}
+	if options.ImageService != nil && options.AssetRepository != nil && options.ConfigRepository != nil {
+		imageAPI := imageBatchHandler{
+			service: options.ImageService, assets: options.AssetRepository, config: options.ConfigRepository,
+			manager: options.ImageManager, maxBody: options.Config.MaxUploadBytes,
+		}
+		mux.HandleFunc("/api/v1/images/batches", imageAPI.serve)
+		mux.HandleFunc("/api/v1/images/batches/", imageAPI.serve)
+	}
+	if options.ImageManager != nil {
+		attemptAPI := imageAttemptHandler{manager: options.ImageManager, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/images/attempts/", attemptAPI.serve)
+	}
 	if options.KnowledgeService != nil {
 		knowledgeAPI := knowledgeHandler{service: options.KnowledgeService, maxBody: options.Config.MaxUploadBytes}
 		mux.HandleFunc("/api/v1/knowledge", knowledgeAPI.serve)
@@ -89,6 +106,11 @@ func NewHandler(options Options) http.Handler {
 		configurationAPI := llmConfigHandler{repository: options.ConfigRepository, maxBody: options.Config.MaxUploadBytes}
 		mux.HandleFunc("/api/v1/llm/config", configurationAPI.serve)
 		mux.HandleFunc("/api/v1/llm/providers/", configurationAPI.serve)
+		imageConfigurationAPI := imageConfigHandler{
+			repository: options.ConfigRepository, capabilities: options.ImageCapabilities, maxBody: options.Config.MaxUploadBytes,
+		}
+		mux.HandleFunc("/api/v1/images/config", imageConfigurationAPI.serve)
+		mux.HandleFunc("/api/v1/images/providers/", imageConfigurationAPI.serve)
 	}
 	if options.SessionService != nil {
 		var runAPI *llmRunHandler
@@ -187,17 +209,28 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 func decodeStrictJSON(response http.ResponseWriter, request *http.Request, maxBody int64, target any, allowEmpty bool) bool {
 	request.Body = http.MaxBytesReader(response, request.Body, maxBody)
 	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
 		if allowEmpty && errors.Is(err, io.EOF) {
 			return true
 		}
 		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must be one valid JSON object")
 		return false
 	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must be one valid JSON object")
+		return false
+	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must contain one JSON object")
+		return false
+	}
+	payload := json.NewDecoder(bytes.NewReader(raw))
+	payload.DisallowUnknownFields()
+	if err := payload.Decode(target); err != nil {
+		writeAPIError(response, http.StatusBadRequest, "invalid_json", "request body must be one valid JSON object")
 		return false
 	}
 	return true

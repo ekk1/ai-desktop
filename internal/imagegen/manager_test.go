@@ -591,6 +591,32 @@ func TestManagerShutdownWaitsForAcceptedStartToFinish(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownClosesBatchSubscribers(t *testing.T) {
+	fixture := newManagerFixture(t, 1)
+	batch := fixture.batchWithPrompts(t, 1, "one")
+	events, unsubscribe, err := fixture.manager.SubscribeBatch(batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unsubscribe()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := fixture.manager.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case _, open := <-events:
+		if open {
+			t.Fatal("subscriber remained open after shutdown")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscriber was not closed during shutdown")
+	}
+	if _, _, err := fixture.manager.SubscribeBatch(batch.ID); !errors.Is(err, ErrImageManagerClosed) {
+		t.Fatalf("subscribe after shutdown error = %v", err)
+	}
+}
+
 func TestManagerShutdownRetriesTerminalPersistence(t *testing.T) {
 	remote := newCancellableRemote(nil)
 	fixture := newManagerFixtureWithRemote(t, 1, remote)
