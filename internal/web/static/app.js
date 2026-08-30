@@ -1,3 +1,5 @@
+import { createLLMConfig } from "/assets/llm-config.js";
+
 const modules = {
   llm: {
     title: "LLM 工作区",
@@ -55,6 +57,8 @@ const emptyState = document.querySelector(".empty-state");
 const backendWorkspace = document.querySelector("#backend-workspace");
 const galleryWorkspace = document.querySelector("#gallery-workspace");
 const knowledgeWorkspace = document.querySelector("#knowledge-workspace");
+const settingsWorkspace = document.querySelector("#settings-workspace");
+const llmConfigWorkspace = createLLMConfig({ readAPIError });
 
 const backendUI = {
   list: document.querySelector("#backend-list"),
@@ -116,10 +120,12 @@ function selectModule(name) {
   const showBackends = name === "backends";
   const showGallery = name === "gallery";
   const showKnowledge = name === "knowledge";
-  emptyState.hidden = showBackends || showGallery || showKnowledge;
+  const showSettings = name === "settings";
+  emptyState.hidden = showBackends || showGallery || showKnowledge || showSettings;
   backendWorkspace.hidden = !showBackends;
   galleryWorkspace.hidden = !showGallery;
   knowledgeWorkspace.hidden = !showKnowledge;
+  settingsWorkspace.hidden = !showSettings;
   if (showBackends) {
     refreshBackends();
   } else {
@@ -127,6 +133,8 @@ function selectModule(name) {
   }
   if (showGallery) refreshGallery();
   if (showKnowledge) refreshKnowledge();
+  if (showSettings) llmConfigWorkspace.enter();
+  else llmConfigWorkspace.leave();
   window.location.hash = name;
   setSidebar(false);
 }

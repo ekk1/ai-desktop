@@ -154,6 +154,38 @@ func TestEmbeddedWorkbenchShellExposesModulesAndResponsiveControls(t *testing.T)
 	}
 }
 
+func TestEmbeddedLLMConfigExposesProgressiveProviderEditors(t *testing.T) {
+	index := getBody(t, "/")
+	for _, id := range []string{
+		`id="settings-workspace"`,
+		`id="llm-provider-list"`,
+		`id="llm-provider-new"`,
+		`id="llm-quick-path-list"`,
+		`id="llm-quick-path-new"`,
+		`id="llm-template-list"`,
+		`id="llm-template-new"`,
+		`id="llm-exa-key"`,
+		`id="llm-preset-llama"`,
+		`id="llm-config-save-status"`,
+		`id="llm-provider-editor"`,
+		`id="llm-quick-path-editor"`,
+		`id="llm-template-editor"`,
+	} {
+		if !strings.Contains(index, id) {
+			t.Errorf("LLM config does not contain %s", id)
+		}
+	}
+	script := getBody(t, "/assets/llm-config.js")
+	for _, endpoint := range []string{
+		`fetch("/api/v1/llm/config"`,
+		`/api/v1/llm/providers/preset/llama-completion`,
+	} {
+		if !strings.Contains(script, endpoint) {
+			t.Errorf("LLM config script does not contain %s", endpoint)
+		}
+	}
+}
+
 func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) {
 	index := getBody(t, "/")
 	for _, id := range []string{

@@ -250,6 +250,60 @@
             </article>
           </div>
         </section>
+
+        <section class="settings-workspace" id="settings-workspace" hidden>
+          <div class="settings-toolbar">
+            <div>
+              <p class="section-kicker">运行时配置</p>
+              <h2>LLM Provider</h2>
+              <p>密钥保存在本机主配置中；下一次请求立即使用最新配置。</p>
+            </div>
+            <div class="button-row">
+              <button type="button" class="secondary-button" id="llm-config-refresh">重新读取</button>
+              <button type="button" class="secondary-button" id="llm-preset-llama">添加 llama.cpp 预设</button>
+              <button type="button" class="primary-button" id="llm-config-save">保存全部</button>
+            </div>
+          </div>
+          <p class="inline-message" id="llm-config-save-status" aria-live="polite">尚未读取配置。</p>
+
+          <div class="settings-sections">
+            <section class="settings-card" aria-labelledby="llm-provider-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">请求目标</p><h3 id="llm-provider-heading">Providers</h3></div>
+                <button type="button" class="secondary-button" id="llm-provider-new">新增 Provider</button>
+              </header>
+              <div class="config-row-list" id="llm-provider-list"></div>
+            </section>
+
+            <section class="settings-card" aria-labelledby="llm-quick-path-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">快速发送</p><h3 id="llm-quick-path-heading">Quick Paths</h3></div>
+                <button type="button" class="secondary-button" id="llm-quick-path-new">新增路径</button>
+              </header>
+              <div class="config-row-list" id="llm-quick-path-list"></div>
+            </section>
+
+            <section class="settings-card" aria-labelledby="llm-template-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">快速插入</p><h3 id="llm-template-heading">Prompt Templates</h3></div>
+                <button type="button" class="secondary-button" id="llm-template-new">新增模板</button>
+              </header>
+              <div class="config-row-list" id="llm-template-list"></div>
+            </section>
+
+            <section class="settings-card" aria-labelledby="llm-exa-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">手动在线搜索</p><h3 id="llm-exa-heading">Exa</h3></div>
+              </header>
+              <div class="form-grid details-grid">
+                <label class="full-width">API URL <input id="llm-exa-url" type="url"></label>
+                <label class="full-width">API Key <input id="llm-exa-key" type="password" autocomplete="off"></label>
+                <label>超时（秒） <input id="llm-exa-timeout" type="number" min="1" max="300"></label>
+                <label>响应上限（字节） <input id="llm-exa-max-response" type="number" min="1"></label>
+              </div>
+            </section>
+          </div>
+        </section>
       </main>
     </div>
   </div>
@@ -352,6 +406,64 @@
         <button type="button" class="secondary-button" id="asset-picker-cancel">取消</button>
         <button type="button" class="primary-button" id="asset-picker-confirm">选取</button>
       </footer>
+    </form>
+  </dialog>
+  <dialog id="llm-provider-editor" class="editor-dialog config-editor-dialog">
+    <form id="llm-provider-form">
+      <header class="dialog-heading">
+        <div><p class="eyebrow">LLM 配置</p><h2 id="llm-provider-editor-title">Provider</h2></div>
+        <button type="button" class="text-button" data-close-dialog="llm-provider-editor">关闭</button>
+      </header>
+      <div class="form-grid">
+        <label>ID <input id="llm-provider-id" required maxlength="120"></label>
+        <label>名称 <input id="llm-provider-name" required maxlength="240"></label>
+        <label class="full-width">URL <input id="llm-provider-url" type="url" required></label>
+        <label>连接超时（秒） <input id="llm-provider-connect-timeout" type="number" min="1" max="300" required></label>
+        <label>总超时（秒） <input id="llm-provider-total-timeout" type="number" min="1" max="86400" required></label>
+        <label class="checkbox-field"><input id="llm-provider-enabled" type="checkbox"> 启用</label>
+      </div>
+      <details class="advanced-form">
+        <summary>API Key、Headers、Body 与响应提取</summary>
+        <div class="form-grid details-grid">
+          <label class="full-width">API Key <input id="llm-provider-api-key" type="password" autocomplete="off"></label>
+          <label class="full-width">Headers JSON <textarea id="llm-provider-headers" rows="5" spellcheck="false"></textarea></label>
+          <label class="full-width">Body Template <textarea id="llm-provider-body" rows="8" spellcheck="false"></textarea></label>
+          <label>响应模式 <select id="llm-provider-response-mode"><option value="json">JSON</option><option value="sse_json">SSE JSON</option></select></label>
+          <label>JSON 内容路径 <input id="llm-provider-content-path"></label>
+          <label>SSE 内容路径 <input id="llm-provider-stream-path"></label>
+          <label>SSE 停止路径 <input id="llm-provider-done-path"></label>
+          <label>响应上限（字节） <input id="llm-provider-max-response" type="number" min="1"></label>
+          <label>Asset 上限（字节） <input id="llm-provider-max-assets" type="number" min="1"></label>
+        </div>
+      </details>
+      <p class="form-error" id="llm-provider-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="llm-provider-editor">取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
+    </form>
+  </dialog>
+  <dialog id="llm-quick-path-editor" class="editor-dialog config-editor-dialog">
+    <form id="llm-quick-path-form">
+      <header class="dialog-heading"><div><p class="eyebrow">快速发送</p><h2>Quick Path</h2></div><button type="button" class="text-button" data-close-dialog="llm-quick-path-editor">关闭</button></header>
+      <div class="form-grid">
+        <label>ID <input id="llm-quick-path-id" required maxlength="120"></label>
+        <label>名称 <input id="llm-quick-path-name" required></label>
+        <label>Provider <select id="llm-quick-path-provider" required></select></label>
+        <label>模型 <input id="llm-quick-path-model"></label>
+        <label class="full-width">默认参数 JSON Object <textarea id="llm-quick-path-params" rows="8" spellcheck="false">{}</textarea></label>
+      </div>
+      <p class="form-error" id="llm-quick-path-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="llm-quick-path-editor">取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
+    </form>
+  </dialog>
+  <dialog id="llm-template-editor" class="editor-dialog config-editor-dialog">
+    <form id="llm-template-form">
+      <header class="dialog-heading"><div><p class="eyebrow">快速插入</p><h2>Prompt Template</h2></div><button type="button" class="text-button" data-close-dialog="llm-template-editor">关闭</button></header>
+      <div class="form-grid">
+        <label>ID <input id="llm-template-id" required maxlength="120"></label>
+        <label>名称 <input id="llm-template-name" required></label>
+        <label class="full-width">文本 <textarea id="llm-template-content" rows="14"></textarea></label>
+      </div>
+      <p class="form-error" id="llm-template-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="llm-template-editor">取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
     </form>
   </dialog>
   <script type="module" src="/assets/app.js"></script>

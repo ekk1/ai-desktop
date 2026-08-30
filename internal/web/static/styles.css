@@ -322,6 +322,80 @@ input:focus-visible {
   margin: 0 auto;
 }
 
+.settings-workspace {
+  max-width: 82rem;
+  margin: 0 auto;
+}
+
+.settings-toolbar,
+.settings-card-heading,
+.config-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.settings-toolbar h2,
+.settings-card-heading h3 {
+  margin: 0;
+}
+
+.settings-toolbar > div > p:last-child {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+}
+
+.settings-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.settings-card {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+}
+
+.config-row-list {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: var(--space-3);
+}
+
+.config-row {
+  align-items: center;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.config-row > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.config-row small {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.config-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.config-editor-dialog {
+  width: min(52rem, calc(100vw - 2rem));
+}
+
 .backend-toolbar,
 .backend-detail-header,
 .log-heading,
@@ -1125,6 +1199,26 @@ summary {
   .knowledge-browser {
     max-height: 22rem;
     overflow: auto;
+  }
+
+  .settings-toolbar,
+  .settings-card-heading,
+  .config-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .config-row-actions {
+    flex-wrap: wrap;
+  }
+
+  .config-editor-dialog {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
   }
 
   .backend-toolbar,

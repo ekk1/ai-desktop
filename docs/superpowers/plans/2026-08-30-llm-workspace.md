@@ -625,19 +625,19 @@ git commit -m "feat: expose LLM workspace API"
 - Consumes: `GET/PUT /api/v1/llm/config`, llama preset endpoint
 - Produces: Settings 模块中的 Provider、QuickPath、PromptTemplate 与 Exa 配置 UI
 
-- [ ] **Step 1: Write failing embedded UI contract test**
+- [x] **Step 1: Write failing embedded UI contract test**
 
 Assert served HTML has Provider list/editor、QuickPath editor、PromptTemplate editor、Exa Key、llama preset、保存状态挂载点；assert `/assets/llm-config.js` is served and requests the LLM config API.
 
-- [ ] **Step 2: Run contract test and verify RED**
+- [x] **Step 2: Run contract test and verify RED**
 
 Run: `go test ./internal/web -run TestEmbeddedLLMConfig -count=1 -v`
 
-- [ ] **Step 3: Implement progressive-disclosure Settings UI**
+- [x] **Step 3: Implement progressive-disclosure Settings UI**
 
 Default rows show name/enabled/edit. URL/timeouts in basic Dialog; API Key、Headers、Body Template、response mode/path/limits in `<details>`. QuickPath validates Params JSON locally. Save sends one complete config object and renders server validation beside the form.
 
-- [ ] **Step 4: Verify and commit Task 9**
+- [x] **Step 4: Verify and commit Task 9**
 
 Run: `go test ./internal/web -count=1 && git diff --check`
 
