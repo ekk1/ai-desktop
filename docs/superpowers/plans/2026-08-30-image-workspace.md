@@ -338,7 +338,7 @@ git commit -m "feat: synchronize image batch assets"
 - Produces: `sdcpp.RenderImageRequest(params map[string]any,prompt,negative string,images ImageFields) ([]byte,error)`
 - Produces: `imagegen.NewAssembler(assets)`, `Build(batch,item,provider) (PreparedRequest,Snapshot,error)`
 
-- [ ] **Step 1: Write failing recursive merge and managed-key tests**
+- [x] **Step 1: Write failing recursive merge and managed-key tests**
 
 ```go
 func TestMergeImageParamsRecursesObjectsAndReplacesArrays(t *testing.T) {
@@ -356,15 +356,15 @@ func TestMergeImageParamsRejectsManagedKeys(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run params tests and verify RED**
+- [x] **Step 2: Run params tests and verify RED**
 
 Run: `go test ./internal/sdcpp -run 'TestMergeImage' -count=1 -v`
 
-- [ ] **Step 3: Implement strict Object decoding and recursive merge**
+- [x] **Step 3: Implement strict Object decoding and recursive merge**
 
 Use `json.Decoder.UseNumber`, require exactly one non-null Object, reject the seven managed keys at the top level, recursively clone Objects, replace arrays/scalars/null, and marshal with standard `encoding/json`. Preserve unknown fields without normalization.
 
-- [ ] **Step 4: Write failing Assembler image and snapshot tests**
+- [x] **Step 4: Write failing Assembler image and snapshot tests**
 
 ```go
 func TestAssemblerInjectsControlledImagesWithoutPersistingDataURLs(t *testing.T) {
@@ -381,15 +381,15 @@ func TestAssemblerInjectsControlledImagesWithoutPersistingDataURLs(t *testing.T)
 
 Add named tests `TestAssemblerPreservesRefImageOrder`, `TestAssemblerAcceptsArchivedReferencedImage`, `TestAssemblerRejectsMissingOrNonImageAsset`, `TestAssemblerEnforcesTotalInputLimit`, and `TestAssemblerRedactsSensitiveHeaders`. The redaction test covers `Authorization`, `Proxy-Authorization`, `X-API-Key` and `API-Key` case-insensitively.
 
-- [ ] **Step 5: Run Assembler tests and verify RED**
+- [x] **Step 5: Run Assembler tests and verify RED**
 
 Run: `go test ./internal/imagegen -run TestAssembler -count=1 -v`
 
-- [ ] **Step 6: Implement `Assembler.Build`**
+- [x] **Step 6: Implement `Assembler.Build`**
 
 `PreparedRequest` contains URL, headers, body and timeouts. Snapshot copies canonical merged params before managed image injection, prompt fields, Provider with redacted headers, and AssetSnapshot metadata. Read each Asset with `io.LimitReader`; Base64 exists only in the returned Body.
 
-- [ ] **Step 7: Verify and commit Task 4**
+- [x] **Step 7: Verify and commit Task 4**
 
 Run: `gofmt -w internal/sdcpp internal/imagegen && go test ./internal/sdcpp ./internal/imagegen -count=1 && git diff --check`
 
