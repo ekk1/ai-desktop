@@ -1,0 +1,129 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/ekk1/ai-desktop/internal/store"
+)
+
+const CurrentSchemaVersion = 1
+
+const (
+	defaultListenPort                   = 8188
+	defaultShutdownTimeoutSeconds       = 10
+	defaultMaxUploadBytes         int64 = 256 << 20
+	minimumMaxUploadBytes         int64 = 1 << 20
+	maximumMaxUploadBytes         int64 = 16 << 30
+)
+
+type Config struct {
+	SchemaVersion          int   `json:"schema_version"`
+	ListenPort             int   `json:"listen_port"`
+	ShutdownTimeoutSeconds int   `json:"shutdown_timeout_seconds"`
+	MaxUploadBytes         int64 `json:"max_upload_bytes"`
+}
+
+func Default() Config {
+	return Config{
+		SchemaVersion:          CurrentSchemaVersion,
+		ListenPort:             defaultListenPort,
+		ShutdownTimeoutSeconds: defaultShutdownTimeoutSeconds,
+		MaxUploadBytes:         defaultMaxUploadBytes,
+	}
+}
+
+func ResolveDataDir(explicit string) (string, error) {
+	path := explicit
+	if path == "" {
+		if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+			path = filepath.Join(xdg, "ai-workbench")
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("resolve user home directory: %w", err)
+			}
+			path = filepath.Join(home, ".local", "share", "ai-workbench")
+		}
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory %q: %w", path, err)
+	}
+	return filepath.Clean(absolute), nil
+}
+
+func Load(path string) (Config, error) {
+	var cfg Config
+	err := store.ReadJSON(path, &cfg)
+	if errors.Is(unwrapPathError(err), os.ErrNotExist) {
+		cfg = Default()
+		if err := Save(path, cfg); err != nil {
+			return Config{}, err
+		}
+		return cfg, nil
+	}
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.SchemaVersion > CurrentSchemaVersion {
+		return Config{}, fmt.Errorf("config schema version %d is newer than supported version %d", cfg.SchemaVersion, CurrentSchemaVersion)
+	}
+	if cfg.SchemaVersion < CurrentSchemaVersion {
+		var migrateErr error
+		cfg, migrateErr = migrate(cfg)
+		if migrateErr != nil {
+			return Config{}, migrateErr
+		}
+		if err := Save(path, cfg); err != nil {
+			return Config{}, err
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
+	}
+	return cfg, nil
+}
+
+func Save(path string, cfg Config) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("validate config before save: %w", err)
+	}
+	if err := store.WriteJSON(path, cfg, 0o600); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	return nil
+}
+
+func (cfg Config) Validate() error {
+	if cfg.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf("schema_version must be %d", CurrentSchemaVersion)
+	}
+	if cfg.ListenPort < 1 || cfg.ListenPort > 65535 {
+		return fmt.Errorf("listen_port must be between 1 and 65535")
+	}
+	if cfg.ShutdownTimeoutSeconds < 1 || cfg.ShutdownTimeoutSeconds > 300 {
+		return fmt.Errorf("shutdown_timeout_seconds must be between 1 and 300")
+	}
+	if cfg.MaxUploadBytes < minimumMaxUploadBytes || cfg.MaxUploadBytes > maximumMaxUploadBytes {
+		return fmt.Errorf("max_upload_bytes must be between %d and %d", minimumMaxUploadBytes, maximumMaxUploadBytes)
+	}
+	return nil
+}
+
+func migrate(cfg Config) (Config, error) {
+	return Config{}, fmt.Errorf("no migration path from config schema version %d", cfg.SchemaVersion)
+}
+
+func unwrapPathError(err error) error {
+	for err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			return pathErr.Err
+		}
+		err = errors.Unwrap(err)
+	}
+	return nil
+}
