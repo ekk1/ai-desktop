@@ -268,7 +268,7 @@ git commit -m "feat: persist image generation batches"
 - Produces Manager primitives: `CreateAttempt`, `UpdateAttempt`, `AttachResult`
 - Reference identities: `image_item:<item-id>` and `image_attempt:<attempt-id>`
 
-- [ ] **Step 1: Write failing input reference lifecycle tests**
+- [x] **Step 1: Write failing input reference lifecycle tests**
 
 ```go
 func TestServiceSynchronizesItemInputReferences(t *testing.T) {
@@ -286,17 +286,17 @@ func TestServiceSynchronizesItemInputReferences(t *testing.T) {
 
 Add named tests `TestServiceRejectsUnknownOrNonImageInputWithoutMutation`, `TestServiceRetainsArchivedInputReference`, `TestServiceDeleteItemAndBatchReleaseAllReferences`, and `TestServiceRollsBackWhenReferenceSynchronizationFails`. Each snapshots the Batch and Asset documents before the operation and compares both documents after the expected error.
 
-- [ ] **Step 2: Run Service lifecycle tests and verify RED**
+- [x] **Step 2: Run Service lifecycle tests and verify RED**
 
 Run: `go test ./internal/imagegen -run 'TestService(Synchronizes|Rejects|Rolls)' -count=1 -v`
 
-- [ ] **Step 3: Implement input reference diff and compensation**
+- [x] **Step 3: Implement input reference diff and compensation**
 
 Canonicalize all five InputAssets fields into a unique ordered ID list. Validate every Asset exists and has `image/` media type before Repository mutation. Apply add/remove reference diffs after mutation; on failure restore the exact old Batch through an unexported Repository rollback primitive, then compensate any already-applied reference changes.
 
 When `CreateBatchInput.BaseParams` is empty bytes, `Service.CreateBatch` assigns `sdcpp.DefaultImageParams()` before Repository validation. A literal `{}` remains a deliberate empty Object.
 
-- [ ] **Step 4: Write failing result attachment tests**
+- [x] **Step 4: Write failing result attachment tests**
 
 ```go
 func TestServiceAttachesAttemptResultReference(t *testing.T) {
@@ -308,15 +308,15 @@ func TestServiceAttachesAttemptResultReference(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Run result attachment tests and verify RED**
+- [x] **Step 5: Run result attachment tests and verify RED**
 
 Run: `go test ./internal/imagegen -run TestServiceAttachesAttemptResultReference -count=1 -v`
 
-- [ ] **Step 6: Implement `AttachResult` and deletion cleanup**
+- [x] **Step 6: Implement `AttachResult` and deletion cleanup**
 
 `AttachResult` accepts only existing `image/*` Assets, adds the attempt reference, then persists the unique ResultAssetID; it removes the new reference if persistence fails. Deleting an Item or Batch removes both input and every Attempt result reference before repository deletion with the same rollback discipline.
 
-- [ ] **Step 7: Verify and commit Task 3**
+- [x] **Step 7: Verify and commit Task 3**
 
 Run: `gofmt -w internal/imagegen && go test ./internal/imagegen -count=1 && git diff --check`
 

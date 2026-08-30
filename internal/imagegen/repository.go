@@ -381,9 +381,58 @@ func (repository *Repository) UpdateAttempt(batchID, itemID, attemptID string, i
 	return cloneAttempt(*attempt), nil
 }
 
+func (repository *Repository) attachAttemptResult(batchID, itemID, attemptID, assetID string) (Attempt, error) {
+	if !validGeneratedID(assetID) {
+		return Attempt{}, fmt.Errorf("image attempt result asset ID is invalid")
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	batch, ok := repository.batches[batchID]
+	if !ok {
+		return Attempt{}, ErrBatchNotFound
+	}
+	itemPosition := itemIndex(batch.Items, itemID)
+	if itemPosition < 0 {
+		return Attempt{}, ErrItemNotFound
+	}
+	attemptPosition := attemptIndex(batch.Items[itemPosition].Attempts, attemptID)
+	if attemptPosition < 0 {
+		return Attempt{}, ErrAttemptNotFound
+	}
+	current := batch.Items[itemPosition].Attempts[attemptPosition]
+	for _, existing := range current.ResultAssetIDs {
+		if existing == assetID {
+			return cloneAttempt(current), nil
+		}
+	}
+	updated := cloneBatch(batch)
+	now := nextTime(batch.UpdatedAt)
+	attempt := &updated.Items[itemPosition].Attempts[attemptPosition]
+	attempt.ResultAssetIDs = append(attempt.ResultAssetIDs, assetID)
+	updated.Items[itemPosition].UpdatedAt, updated.UpdatedAt = now, now
+	if err := repository.save(updated); err != nil {
+		return Attempt{}, err
+	}
+	repository.batches[batchID] = updated
+	return cloneAttempt(*attempt), nil
+}
+
 func (repository *Repository) save(batch Batch) error {
 	document := batchDocument{SchemaVersion: batchSchemaVersion, Batch: cloneBatch(batch)}
 	return store.WriteJSON(filepath.Join(repository.root, batch.ID, "batch.json"), document, 0o600)
+}
+
+func (repository *Repository) restoreBatch(batch Batch) error {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if !validGeneratedID(batch.ID) {
+		return fmt.Errorf("restore image batch identity is invalid")
+	}
+	if err := repository.save(batch); err != nil {
+		return err
+	}
+	repository.batches[batch.ID] = cloneBatch(batch)
+	return nil
 }
 
 func normalizeBatchInput(input CreateBatchInput) (CreateBatchInput, error) {
