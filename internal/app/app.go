@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 	"github.com/ekk1/ai-desktop/internal/instance"
@@ -43,6 +44,10 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 		return nil, nil, fmt.Errorf("open backend profiles: %w", err)
 	}
 	manager := backend.NewManager(repository, filepath.Join(dataDir, "backends", "crash-logs"))
+	assetRepository, err := asset.OpenRepository(filepath.Join(dataDir, "assets", "index.json"), filepath.Join(dataDir, "assets", "files"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("open asset repository: %w", err)
+	}
 
 	server := &http.Server{
 		Addr: "127.0.0.1:" + strconv.Itoa(runtimeConfig.ListenPort),
@@ -52,6 +57,7 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 			Config:            runtimeConfig,
 			BackendRepository: repository,
 			BackendManager:    manager,
+			AssetRepository:   assetRepository,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

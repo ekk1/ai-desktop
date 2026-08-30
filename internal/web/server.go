@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 
+	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 )
@@ -19,6 +20,7 @@ type Options struct {
 	Config            config.Config
 	BackendRepository *backend.Repository
 	BackendManager    *backend.Manager
+	AssetRepository   *asset.Repository
 }
 
 type errorEnvelope struct {
@@ -62,6 +64,11 @@ func NewHandler(options Options) http.Handler {
 		}
 		mux.HandleFunc("/api/v1/backends", backendAPI.serve)
 		mux.HandleFunc("/api/v1/backends/", backendAPI.serve)
+	}
+	if options.AssetRepository != nil {
+		assetAPI := assetHandler{repository: options.AssetRepository, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/assets", assetAPI.serve)
+		mux.HandleFunc("/api/v1/assets/", assetAPI.serve)
 	}
 
 	serveEmbeddedFile(mux, "/assets/styles.css", "static/styles.css", "text/css; charset=utf-8")

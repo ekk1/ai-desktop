@@ -99,6 +99,14 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	assetsResponse, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/assets", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = assetsResponse.Body.Close()
+	if assetsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("asset list status = %d", assetsResponse.StatusCode)
+	}
 
 	profile := backend.DefaultProfile()
 	profile.Name = "lifecycle backend"
@@ -155,6 +163,9 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "backends", "profiles.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "assets", "index.json")); err != nil {
 		t.Fatal(err)
 	}
 	if err := syscall.Kill(started.PID, 0); !errors.Is(err, syscall.ESRCH) {
