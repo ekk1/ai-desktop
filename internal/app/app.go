@@ -14,6 +14,7 @@ import (
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
 	"github.com/ekk1/ai-desktop/internal/instance"
+	"github.com/ekk1/ai-desktop/internal/knowledge"
 	"github.com/ekk1/ai-desktop/internal/web"
 )
 
@@ -48,6 +49,10 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 	if err != nil {
 		return nil, nil, fmt.Errorf("open asset repository: %w", err)
 	}
+	knowledgeRepository, err := knowledge.OpenRepository(filepath.Join(dataDir, "knowledge", "notes.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("open knowledge repository: %w", err)
+	}
 
 	server := &http.Server{
 		Addr: "127.0.0.1:" + strconv.Itoa(runtimeConfig.ListenPort),
@@ -58,6 +63,7 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 			BackendRepository: repository,
 			BackendManager:    manager,
 			AssetRepository:   assetRepository,
+			KnowledgeService:  knowledge.NewService(knowledgeRepository, assetRepository),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

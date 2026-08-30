@@ -9,6 +9,7 @@ import (
 	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
+	"github.com/ekk1/ai-desktop/internal/knowledge"
 )
 
 //go:embed static/*
@@ -21,6 +22,7 @@ type Options struct {
 	BackendRepository *backend.Repository
 	BackendManager    *backend.Manager
 	AssetRepository   *asset.Repository
+	KnowledgeService  *knowledge.Service
 }
 
 type errorEnvelope struct {
@@ -69,6 +71,11 @@ func NewHandler(options Options) http.Handler {
 		assetAPI := assetHandler{repository: options.AssetRepository, maxBody: options.Config.MaxUploadBytes}
 		mux.HandleFunc("/api/v1/assets", assetAPI.serve)
 		mux.HandleFunc("/api/v1/assets/", assetAPI.serve)
+	}
+	if options.KnowledgeService != nil {
+		knowledgeAPI := knowledgeHandler{service: options.KnowledgeService, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/knowledge", knowledgeAPI.serve)
+		mux.HandleFunc("/api/v1/knowledge/", knowledgeAPI.serve)
 	}
 
 	serveEmbeddedFile(mux, "/assets/styles.css", "static/styles.css", "text/css; charset=utf-8")

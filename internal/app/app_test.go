@@ -107,6 +107,14 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	if assetsResponse.StatusCode != http.StatusOK {
 		t.Fatalf("asset list status = %d", assetsResponse.StatusCode)
 	}
+	knowledgeResponse, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/knowledge", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = knowledgeResponse.Body.Close()
+	if knowledgeResponse.StatusCode != http.StatusOK {
+		t.Fatalf("knowledge list status = %d", knowledgeResponse.StatusCode)
+	}
 
 	profile := backend.DefaultProfile()
 	profile.Name = "lifecycle backend"
@@ -166,6 +174,9 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "assets", "index.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "knowledge", "notes.json")); err != nil {
 		t.Fatal(err)
 	}
 	if err := syscall.Kill(started.PID, 0); !errors.Is(err, syscall.ESRCH) {

@@ -145,25 +145,25 @@ git commit -m "feat: add shared asset gallery"
 - Produces: Note CRUD、文件夹与文本过滤
 - Produces: `/api/v1/knowledge` 与 `/api/v1/knowledge/{id}`
 
-- [ ] **Step 1: 写 Repository 失败测试**
+- [x] **Step 1: 写 Repository 失败测试**
 
 测试创建、更新、删除、重新打开、文件夹/标签/正文搜索、稳定排序和深拷贝；标题必填，正文允许空，资产 ID 去重。
 
-- [ ] **Step 2: 实现 Repository 并验证**
+- [x] **Step 2: 实现 Repository 并验证**
 
 Run: `go test ./internal/knowledge -v`
 
-- [ ] **Step 3: 写并实现资产引用服务测试**
+- [x] **Step 3: 写并实现资产引用服务测试**
 
 使用真实 Asset 与 Knowledge Repository 验证创建、更新和删除时引用同步；未知资产必须拒绝；任一步失败时恢复两侧原状态。
 
-- [ ] **Step 4: 写并实现 API 测试**
+- [x] **Step 4: 写并实现 API 测试**
 
 验证 CRUD、过滤参数、无效 JSON 和未知 ID 的 Error Envelope；App 打开 `<data-dir>/knowledge/notes.json`。
 
 Run: `go test ./internal/web ./internal/app -count=1 -v`
 
-- [ ] **Step 5: 提交 Task 4**
+- [x] **Step 5: 提交 Task 4**
 
 ```bash
 git add internal/knowledge internal/web internal/app
