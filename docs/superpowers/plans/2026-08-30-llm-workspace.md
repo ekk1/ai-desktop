@@ -474,7 +474,7 @@ func TestRunStoreReopensActiveRunsAsInterrupted(t *testing.T) {
 
 Store under the owning Session `runs/<run-id>.json`, schema 1. Snapshot is written before state `running`. Return deep copies and stable newest-first lists.
 
-- [ ] **Step 3: Write failing multi-path streaming Manager test**
+- [x] **Step 3: Write failing multi-path streaming Manager test**
 
 ```go
 func TestManagerCreatesSiblingPanelsForMultipleQuickPaths(t *testing.T) {
@@ -491,11 +491,11 @@ func TestManagerCreatesSiblingPanelsForMultipleQuickPaths(t *testing.T) {
 
 Add tests for snapshot-before-request, subscriber snapshot/chunk/state order, one-run cancellation, failed request without success Panel, and Shutdown waiting for goroutines.
 
-- [ ] **Step 4: Implement Manager lifecycle**
+- [x] **Step 4: Implement Manager lifecycle**
 
 Copy Provider/QuickPath from one config Snapshot before starting, reject duplicate/disabled paths, persist all queued Runs, launch one goroutine per Run, keep bounded in-memory output, and synchronize subscriber channels without blocking Provider reads.
 
-- [ ] **Step 5: Verify race safety and commit Task 6**
+- [x] **Step 5: Verify race safety and commit Task 6**
 
 Run: `go test -race ./internal/llm ./internal/session ./internal/provider -count=1`
 
