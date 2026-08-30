@@ -420,7 +420,7 @@ func (Client) Cancel(context.Context, ImageProvider, string) error
 
 `Capabilities` keeps Model, SupportedModes, DefaultsByMode, OutputFormatsByMode, FeaturesByMode, Samplers, Schedulers, Loras, Upscalers and Limits as typed fields plus `json.RawMessage` for unknown mode metadata. `JobResult` has OutputFormat and `[]JobImage`; `JobImage` has Index and B64JSON. `Job` has ID, Kind, Status, QueuePosition, Result and RemoteError.
 
-- [ ] **Step 1: Write failing capabilities and submission tests**
+- [x] **Step 1: Write failing capabilities and submission tests**
 
 ```go
 func TestClientReadsCapabilitiesAndSubmitsNativeImageJob(t *testing.T) {
@@ -443,15 +443,15 @@ func TestClientReadsCapabilitiesAndSubmitsNativeImageJob(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run Client tests and verify RED**
+- [x] **Step 2: Run Client tests and verify RED**
 
 Run: `go test ./internal/sdcpp -run TestClient -count=1 -v`
 
-- [ ] **Step 3: Implement bounded HTTP transport and strict DTO validation**
+- [x] **Step 3: Implement bounded HTTP transport and strict DTO validation**
 
 Build a per-call `http.Client` with `net.Dialer.Timeout`, no proxy override, and redirect rejection. Join fixed paths to canonical BaseURL; URL-escape RemoteJobID. Require 2xx for capabilities/job/cancel and exactly 202 for submit. Read at most `MaxResponseBytes+1`, require one JSON document, verify Job kind `img_gen`, valid state and non-empty ID. Do not follow or request `poll_url`.
 
-- [ ] **Step 4: Write failing completion/error/cancel/limit tests**
+- [x] **Step 4: Write failing completion/error/cancel/limit tests**
 
 ```go
 func TestClientReadsCompletedJobAndCancelsByID(t *testing.T) {
@@ -476,15 +476,15 @@ func TestClientReadsCompletedJobAndCancelsByID(t *testing.T) {
 
 Add table-driven `TestClientReturnsTypedHTTPError` for 404/409/410, plus `TestClientRejectsOversizedResponse`, `TestClientRejectsInvalidJSON`, `TestClientHonorsContextCancellation`, and `TestClientBoundsErrorBodyTo4096Bytes` using real `httptest.Server` handlers.
 
-- [ ] **Step 5: Run completion/error/cancel tests and verify RED**
+- [x] **Step 5: Run completion/error/cancel tests and verify RED**
 
 Run: `go test ./internal/sdcpp -run 'TestClient(ReadsCompleted|ReturnsTyped|Rejects|Honors|Bounds)' -count=1 -v`
 
-- [ ] **Step 6: Implement Job and Cancel methods plus error types**
+- [x] **Step 6: Implement Job and Cancel methods plus error types**
 
 `HTTPError` exposes StatusCode and at most 4096 response bytes. `JobResult.Images` retains Base64 strings only in memory DTOs. Cancel accepts 200 only; Manager handles 404/409/410 recovery policy.
 
-- [ ] **Step 7: Verify and commit Task 5**
+- [x] **Step 7: Verify and commit Task 5**
 
 Run: `gofmt -w internal/sdcpp && go test ./internal/sdcpp -count=1 && git diff --check`
 
