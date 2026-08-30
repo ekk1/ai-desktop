@@ -215,8 +215,8 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configuration.SchemaVersion != 2 {
-		t.Fatalf("config schema = %d, want 2", configuration.SchemaVersion)
+	if configuration.SchemaVersion != config.CurrentSchemaVersion {
+		t.Fatalf("config schema = %d, want %d", configuration.SchemaVersion, config.CurrentSchemaVersion)
 	}
 	if err := syscall.Kill(started.PID, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("managed backend PID %d survived app shutdown: %v", started.PID, err)
