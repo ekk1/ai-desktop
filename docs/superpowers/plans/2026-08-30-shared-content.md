@@ -178,15 +178,15 @@ git commit -m "feat: add knowledge memo API"
 - Modify: `internal/web/static/app.js`
 - Modify: `internal/web/server_test.go`
 
-- [ ] **Step 1: 写知识库页面契约失败测试**
+- [x] **Step 1: 写知识库页面契约失败测试**
 
 验证文件夹/条目列表、搜索、新建、标题、文件夹、标签、正文、资产 ID 和保存/删除操作。
 
-- [ ] **Step 2: 实现简洁双栏备忘录 UI**
+- [x] **Step 2: 实现简洁双栏备忘录 UI**
 
 左侧模块栏显示文件夹与条目，右侧直接编辑当前条目；窄屏保持现有抽屉规则，保存状态就地显示。
 
-- [ ] **Step 3: 运行并提交 Task 5**
+- [x] **Step 3: 运行并提交 Task 5**
 
 Run: `go test ./internal/web -v`
 

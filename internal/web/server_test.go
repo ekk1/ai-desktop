@@ -219,6 +219,37 @@ func TestEmbeddedGalleryExposesAssetWorkflowAndReusablePicker(t *testing.T) {
 	}
 }
 
+func TestEmbeddedKnowledgeWorkspaceExposesMemoEditor(t *testing.T) {
+	index := getBody(t, "/")
+	for _, id := range []string{
+		`id="knowledge-workspace"`,
+		`id="knowledge-search"`,
+		`id="knowledge-folder-filter"`,
+		`id="knowledge-list"`,
+		`id="knowledge-new"`,
+		`id="knowledge-form"`,
+		`id="knowledge-title"`,
+		`id="knowledge-folder"`,
+		`id="knowledge-tags"`,
+		`id="knowledge-content"`,
+		`id="knowledge-assets"`,
+		`id="knowledge-choose-assets"`,
+		`id="knowledge-save"`,
+		`id="knowledge-delete"`,
+	} {
+		if !strings.Contains(index, id) {
+			t.Errorf("knowledge workspace does not contain %s", id)
+		}
+	}
+
+	script := getBody(t, "/assets/app.js")
+	for _, behavior := range []string{`fetch("/api/v1/knowledge`, "window.openAssetPicker"} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("knowledge script does not contain %s", behavior)
+		}
+	}
+}
+
 func getBody(t *testing.T, path string) string {
 	t.Helper()
 	recorder := httptest.NewRecorder()

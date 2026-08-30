@@ -192,6 +192,64 @@
           <p class="inline-message" id="gallery-message" aria-live="polite">正在读取资产…</p>
           <div class="asset-grid" id="gallery-grid" aria-live="polite"></div>
         </section>
+
+        <section class="knowledge-workspace" id="knowledge-workspace" hidden>
+          <div class="knowledge-toolbar">
+            <div>
+              <p class="section-kicker">轻量备忘录</p>
+              <h2>知识库</h2>
+            </div>
+            <button type="button" class="primary-button" id="knowledge-new">新建条目</button>
+          </div>
+
+          <div class="knowledge-grid">
+            <aside class="knowledge-browser" aria-label="知识条目">
+              <label class="gallery-search-field">搜索
+                <input id="knowledge-search" type="search" placeholder="标题、正文或标签">
+              </label>
+              <label class="gallery-search-field">文件夹
+                <select id="knowledge-folder-filter"><option value="">全部文件夹</option></select>
+              </label>
+              <p class="inline-message" id="knowledge-list-message">正在读取条目…</p>
+              <div class="knowledge-list" id="knowledge-list"></div>
+            </aside>
+
+            <article class="knowledge-editor">
+              <form id="knowledge-form">
+                <header class="knowledge-editor-header">
+                  <div>
+                    <p class="eyebrow">当前条目</p>
+                    <h3 id="knowledge-editor-heading">新建备忘录</h3>
+                  </div>
+                  <div class="button-row">
+                    <button type="button" class="text-button danger-text" id="knowledge-delete" disabled>删除</button>
+                    <button type="submit" class="primary-button" id="knowledge-save">保存</button>
+                  </div>
+                </header>
+                <div class="form-grid knowledge-fields">
+                  <label>标题 <input id="knowledge-title" required maxlength="240" placeholder="自行输入标题"></label>
+                  <label>文件夹 <input id="knowledge-folder" maxlength="240" placeholder="例如 models/llama"></label>
+                  <label class="full-width">标签 <input id="knowledge-tags" placeholder="用逗号分隔"></label>
+                  <label class="full-width">正文
+                    <textarea id="knowledge-content" rows="18" placeholder="记录可快速加入完整请求的内容"></textarea>
+                  </label>
+                </div>
+                <section class="knowledge-assets-section" aria-labelledby="knowledge-assets-title">
+                  <div class="knowledge-assets-heading">
+                    <div>
+                      <p class="eyebrow">关联内容</p>
+                      <h4 id="knowledge-assets-title">Assets</h4>
+                    </div>
+                    <button type="button" class="secondary-button" id="knowledge-choose-assets">从精选库选择</button>
+                  </div>
+                  <div class="knowledge-assets" id="knowledge-assets"></div>
+                </section>
+                <p class="form-error" id="knowledge-form-error" role="alert"></p>
+                <p class="inline-message" id="knowledge-save-message" aria-live="polite"></p>
+              </form>
+            </article>
+          </div>
+        </section>
       </main>
     </div>
   </div>

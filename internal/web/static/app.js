@@ -54,6 +54,7 @@ const sidebarScrim = document.querySelector(".sidebar-scrim");
 const emptyState = document.querySelector(".empty-state");
 const backendWorkspace = document.querySelector("#backend-workspace");
 const galleryWorkspace = document.querySelector("#gallery-workspace");
+const knowledgeWorkspace = document.querySelector("#knowledge-workspace");
 
 const backendUI = {
   list: document.querySelector("#backend-list"),
@@ -114,15 +115,18 @@ function selectModule(name) {
   sidebarContent.append(description, action);
   const showBackends = name === "backends";
   const showGallery = name === "gallery";
-  emptyState.hidden = showBackends || showGallery;
+  const showKnowledge = name === "knowledge";
+  emptyState.hidden = showBackends || showGallery || showKnowledge;
   backendWorkspace.hidden = !showBackends;
   galleryWorkspace.hidden = !showGallery;
+  knowledgeWorkspace.hidden = !showKnowledge;
   if (showBackends) {
     refreshBackends();
   } else {
     closeBackendLogEvents();
   }
   if (showGallery) refreshGallery();
+  if (showKnowledge) refreshKnowledge();
   window.location.hash = name;
   setSidebar(false);
 }
@@ -712,6 +716,212 @@ assetPicker.addEventListener("cancel", (event) => {
   event.preventDefault();
   closeAssetPicker(null);
 });
+
+const knowledgeUI = {
+  search: document.querySelector("#knowledge-search"),
+  folderFilter: document.querySelector("#knowledge-folder-filter"),
+  list: document.querySelector("#knowledge-list"),
+  listMessage: document.querySelector("#knowledge-list-message"),
+  form: document.querySelector("#knowledge-form"),
+  title: document.querySelector("#knowledge-title"),
+  folder: document.querySelector("#knowledge-folder"),
+  tags: document.querySelector("#knowledge-tags"),
+  content: document.querySelector("#knowledge-content"),
+  assets: document.querySelector("#knowledge-assets"),
+  error: document.querySelector("#knowledge-form-error"),
+  message: document.querySelector("#knowledge-save-message"),
+  delete: document.querySelector("#knowledge-delete"),
+};
+
+let knowledgeNotes = [];
+let editingKnowledgeID = "";
+let knowledgeIsDraft = false;
+let knowledgeLinkedAssets = new Map();
+let knowledgeSearchTimer = null;
+
+async function refreshKnowledge() {
+  knowledgeUI.listMessage.textContent = "正在读取条目…";
+  const parameters = new URLSearchParams();
+  if (knowledgeUI.search.value.trim()) parameters.set("q", knowledgeUI.search.value.trim());
+  try {
+    const response = await fetch("/api/v1/knowledge?" + parameters);
+    if (!response.ok) throw new Error(await readAPIError(response));
+    knowledgeNotes = (await response.json()).notes ?? [];
+    renderKnowledgeFolders();
+    renderKnowledgeList();
+    if (!knowledgeIsDraft && !knowledgeNotes.some((note) => note.id === editingKnowledgeID)) {
+      if (knowledgeNotes.length) await selectKnowledgeNote(knowledgeNotes[0]);
+      else startKnowledgeDraft();
+    }
+  } catch (error) {
+    knowledgeUI.listMessage.textContent = `读取失败：${error.message}`;
+  }
+}
+
+function renderKnowledgeFolders() {
+  const selected = knowledgeUI.folderFilter.value;
+  const folders = [...new Set(knowledgeNotes.map((note) => note.folder).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+  knowledgeUI.folderFilter.replaceChildren(new Option("全部文件夹", ""));
+  for (const folder of folders) knowledgeUI.folderFilter.append(new Option(folder, folder));
+  knowledgeUI.folderFilter.value = folders.includes(selected) ? selected : "";
+}
+
+function visibleKnowledgeNotes() {
+  const folder = knowledgeUI.folderFilter.value;
+  return folder ? knowledgeNotes.filter((note) => note.folder === folder) : knowledgeNotes;
+}
+
+function renderKnowledgeList() {
+  const notes = visibleKnowledgeNotes();
+  knowledgeUI.list.replaceChildren();
+  knowledgeUI.listMessage.textContent = notes.length ? "" : "当前筛选下没有条目。";
+  for (const note of notes) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "knowledge-list-item";
+    button.setAttribute("aria-current", String(note.id === editingKnowledgeID));
+    const title = document.createElement("strong");
+    title.textContent = note.title;
+    const details = document.createElement("small");
+    details.textContent = note.folder || "未分类";
+    button.append(title, details);
+    button.addEventListener("click", () => selectKnowledgeNote(note));
+    knowledgeUI.list.append(button);
+  }
+}
+
+async function selectKnowledgeNote(note) {
+  editingKnowledgeID = note.id;
+  knowledgeIsDraft = false;
+  document.querySelector("#knowledge-editor-heading").textContent = note.title;
+  knowledgeUI.title.value = note.title;
+  knowledgeUI.folder.value = note.folder || "";
+  knowledgeUI.tags.value = (note.tags ?? []).join(", ");
+  knowledgeUI.content.value = note.content || "";
+  knowledgeUI.error.textContent = "";
+  knowledgeUI.message.textContent = "";
+  knowledgeUI.delete.disabled = false;
+  knowledgeLinkedAssets = new Map();
+  await Promise.all((note.asset_ids ?? []).map(async (id) => {
+    const response = await fetch(`/api/v1/assets/${encodeURIComponent(id)}`);
+    if (response.ok) knowledgeLinkedAssets.set(id, await response.json());
+    else knowledgeLinkedAssets.set(id, { id, display_name: id, state: "unknown" });
+  }));
+  renderKnowledgeAssets();
+  renderKnowledgeList();
+}
+
+function startKnowledgeDraft() {
+  editingKnowledgeID = "";
+  knowledgeIsDraft = true;
+  document.querySelector("#knowledge-editor-heading").textContent = "新建备忘录";
+  knowledgeUI.form.reset();
+  knowledgeUI.folderFilter.value = knowledgeUI.folderFilter.value || "";
+  knowledgeUI.error.textContent = "";
+  knowledgeUI.message.textContent = "尚未保存。";
+  knowledgeUI.delete.disabled = true;
+  knowledgeLinkedAssets = new Map();
+  renderKnowledgeAssets();
+  renderKnowledgeList();
+  knowledgeUI.title.focus();
+}
+
+function renderKnowledgeAssets() {
+  knowledgeUI.assets.replaceChildren();
+  if (!knowledgeLinkedAssets.size) {
+    const empty = document.createElement("p");
+    empty.className = "inline-message";
+    empty.textContent = "没有关联 Asset。";
+    knowledgeUI.assets.append(empty);
+    return;
+  }
+  for (const item of knowledgeLinkedAssets.values()) {
+    const pill = document.createElement("span");
+    pill.className = "knowledge-asset-pill";
+    const name = document.createElement("span");
+    name.textContent = item.display_name;
+    name.title = item.id;
+    const state = document.createElement("small");
+    state.textContent = item.state === "active" ? "精选" : item.state === "archive" ? "归档" : "不可用";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `移除 ${item.display_name}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      knowledgeLinkedAssets.delete(item.id);
+      renderKnowledgeAssets();
+    });
+    pill.append(name, state, remove);
+    knowledgeUI.assets.append(pill);
+  }
+}
+
+async function chooseKnowledgeAssets() {
+  const selected = await window.openAssetPicker({ multiple: true, selected: [...knowledgeLinkedAssets.keys()] });
+  if (selected === null) return;
+  const retained = [...knowledgeLinkedAssets.values()].filter((item) => item.state !== "active");
+  knowledgeLinkedAssets = new Map(retained.map((item) => [item.id, item]));
+  for (const item of selected) knowledgeLinkedAssets.set(item.id, item);
+  renderKnowledgeAssets();
+}
+
+function knowledgeInput() {
+  return {
+    title: knowledgeUI.title.value.trim(),
+    folder: knowledgeUI.folder.value.trim(),
+    content: knowledgeUI.content.value,
+    tags: knowledgeUI.tags.value.split(/[,，\n]/).map((tag) => tag.trim()).filter(Boolean),
+    asset_ids: [...knowledgeLinkedAssets.keys()],
+  };
+}
+
+async function saveKnowledgeNote(event) {
+  event.preventDefault();
+  knowledgeUI.error.textContent = "";
+  knowledgeUI.message.textContent = "正在保存…";
+  const path = editingKnowledgeID ? `/api/v1/knowledge/${encodeURIComponent(editingKnowledgeID)}` : "/api/v1/knowledge";
+  const response = await fetch(path, {
+    method: editingKnowledgeID ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(knowledgeInput()),
+  });
+  if (!response.ok) {
+    knowledgeUI.message.textContent = "";
+    knowledgeUI.error.textContent = await readAPIError(response);
+    return;
+  }
+  const saved = await response.json();
+  editingKnowledgeID = saved.id;
+  knowledgeIsDraft = false;
+  knowledgeUI.message.textContent = "已保存。";
+  await refreshKnowledge();
+  const refreshed = knowledgeNotes.find((note) => note.id === saved.id);
+  if (refreshed) await selectKnowledgeNote(refreshed);
+  knowledgeUI.message.textContent = "已保存。";
+}
+
+async function deleteKnowledgeNote() {
+  const note = knowledgeNotes.find((candidate) => candidate.id === editingKnowledgeID);
+  if (!note || !window.confirm(`删除知识条目“${note.title}”？`)) return;
+  const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(note.id)}`, { method: "DELETE" });
+  if (!response.ok) {
+    knowledgeUI.error.textContent = await readAPIError(response);
+    return;
+  }
+  editingKnowledgeID = "";
+  knowledgeIsDraft = false;
+  await refreshKnowledge();
+}
+
+document.querySelector("#knowledge-new").addEventListener("click", startKnowledgeDraft);
+knowledgeUI.search.addEventListener("input", () => {
+  window.clearTimeout(knowledgeSearchTimer);
+  knowledgeSearchTimer = window.setTimeout(refreshKnowledge, 180);
+});
+knowledgeUI.folderFilter.addEventListener("change", renderKnowledgeList);
+knowledgeUI.form.addEventListener("submit", saveKnowledgeNote);
+knowledgeUI.delete.addEventListener("click", deleteKnowledgeNote);
+document.querySelector("#knowledge-choose-assets").addEventListener("click", chooseKnowledgeAssets);
 
 document.querySelector("#backend-new").addEventListener("click", () => openBackendEditor());
 document.querySelector("#backend-refresh").addEventListener("click", refreshBackends);
