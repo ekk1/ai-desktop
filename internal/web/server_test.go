@@ -1,0 +1,128 @@
+package web
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/ekk1/ai-desktop/internal/config"
+)
+
+func testHandler() http.Handler {
+	return NewHandler(Options{
+		Version: "test",
+		DataDir: "/tmp/workbench-test",
+		Config:  config.Default(),
+	})
+}
+
+func TestHealthReturnsVersionedStatus(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	testHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	var got struct {
+		Status  string `json:"status"`
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "ok" || got.Version != "test" {
+		t.Fatalf("health = %#v", got)
+	}
+	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", got)
+	}
+}
+
+func TestSettingsExposeRuntimeConfiguration(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	testHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	var got struct {
+		DataDir                string `json:"data_dir"`
+		ListenPort             int    `json:"listen_port"`
+		ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds"`
+		MaxUploadBytes         int64  `json:"max_upload_bytes"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.DataDir != "/tmp/workbench-test" || got.ListenPort != 8188 || got.ShutdownTimeoutSeconds != 10 || got.MaxUploadBytes != 268435456 {
+		t.Fatalf("settings = %#v", got)
+	}
+}
+
+func TestUnknownAPIUsesJSONErrorEnvelope(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	testHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	var got struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Error.Code != "not_found" || got.Error.Message != "resource not found" {
+		t.Fatalf("error = %#v", got.Error)
+	}
+}
+
+func TestHealthRejectsWrongMethodWithJSON(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	testHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/health", nil))
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("Content-Type = %q", got)
+	}
+}
+
+func TestEmbeddedFilesAreServedAtExplicitPaths(t *testing.T) {
+	tests := []struct {
+		path        string
+		contentType string
+	}{
+		{path: "/", contentType: "text/html"},
+		{path: "/assets/styles.css", contentType: "text/css"},
+		{path: "/assets/app.js", contentType: "text/javascript"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			testHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, test.path, nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", recorder.Code)
+			}
+			if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, test.contentType) {
+				t.Fatalf("Content-Type = %q, want prefix %q", got, test.contentType)
+			}
+		})
+	}
+
+	recorder := httptest.NewRecorder()
+	testHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/unknown-browser-path", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("unknown browser path status = %d, want 404", recorder.Code)
+	}
+}
