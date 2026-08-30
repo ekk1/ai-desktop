@@ -456,7 +456,7 @@ git commit -m "feat: execute configurable LLM providers"
 - Produces: `llm.NewManager(configRepository, sessionService, assembler, executor, runStore)`
 - Produces: `Start(sessionID, panelID string, quickPathIDs []string) ([]Run,error)`, `Get`, `Cancel`, `Subscribe`, `Shutdown`
 
-- [ ] **Step 1: Write failing persistence/interruption tests**
+- [x] **Step 1: Write failing persistence/interruption tests**
 
 ```go
 func TestRunStoreReopensActiveRunsAsInterrupted(t *testing.T) {
@@ -470,7 +470,7 @@ func TestRunStoreReopensActiveRunsAsInterrupted(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement one JSON file per Run**
+- [x] **Step 2: Implement one JSON file per Run**
 
 Store under the owning Session `runs/<run-id>.json`, schema 1. Snapshot is written before state `running`. Return deep copies and stable newest-first lists.
 
