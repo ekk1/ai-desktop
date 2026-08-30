@@ -397,6 +397,23 @@ func (repository *Repository) restoreWorkspace(workspace Workspace) error {
 	return nil
 }
 
+func (repository *Repository) deleteWorkspace(sessionID string) error {
+	if !validGeneratedID(sessionID) {
+		return ErrSessionNotFound
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if _, exists := repository.workspaces[sessionID]; !exists {
+		return ErrSessionNotFound
+	}
+	path := filepath.Join(repository.root, sessionID)
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("delete session workspace: %w", err)
+	}
+	delete(repository.workspaces, sessionID)
+	return nil
+}
+
 func (repository *Repository) save(workspace Workspace) error {
 	path := filepath.Join(repository.root, workspace.Session.ID, "workspace.json")
 	return store.WriteJSON(path, workspace, 0o600)

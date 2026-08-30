@@ -240,7 +240,7 @@ git commit -m "feat: add branching LLM sessions"
 - Produces: `session.NewService(repository, assets)` with mutation methods matching Repository and read methods `List`, `Get`, `PathTo`
 - Reference identity: `asset.Reference{Module:"session_panel", RecordID:panel.ID}`
 
-- [ ] **Step 1: Write failing lifecycle and rollback tests**
+- [x] **Step 1: Write failing lifecycle and rollback tests**
 
 ```go
 func TestServiceSynchronizesPanelAssetReferences(t *testing.T) {
@@ -267,15 +267,15 @@ func TestServiceRejectsUnknownAssetWithoutChangingWorkspace(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run Service tests and verify RED**
+- [x] **Step 2: Run Service tests and verify RED**
 
 Run: `go test ./internal/session -run TestService -count=1 -v`
 
-- [ ] **Step 3: Implement serialized compensating mutations**
+- [x] **Step 3: Implement serialized compensating mutations**
 
 Validate every new Asset ID before Workspace writes. Add new references, save Workspace, then remove obsolete references; on failure restore the exact old Workspace and reverse completed reference changes. Delete/fork operate on all affected Panels under one Service mutex.
 
-- [ ] **Step 4: Verify and commit Task 3**
+- [x] **Step 4: Verify and commit Task 3**
 
 Run: `go test ./internal/session ./internal/asset -count=1`
 
