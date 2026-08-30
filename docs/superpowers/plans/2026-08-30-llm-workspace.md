@@ -39,7 +39,7 @@
 - Produces: `config.OpenRepository(path string)`, `Snapshot() Config`, `UpdateLLM(provider.LLMConfig) (Config, error)`
 - Changes: `config.CurrentSchemaVersion` from 1 to 2 and adds `Config.LLM provider.LLMConfig`
 
-- [ ] **Step 1: Write failing Provider validation tests**
+- [x] **Step 1: Write failing Provider validation tests**
 
 ```go
 func TestDefaultLLMConfigContainsRunnableLocalPath(t *testing.T) {
@@ -59,13 +59,13 @@ func TestLLMConfigRejectsBrokenReferencesAndUnsafeHeaders(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run Provider tests and verify RED**
+- [x] **Step 2: Run Provider tests and verify RED**
 
 Run: `go test ./internal/provider -run TestLLMConfig -count=1 -v`
 
 Expected: FAIL because the package and types do not exist.
 
-- [ ] **Step 3: Implement exact config types and validation**
+- [x] **Step 3: Implement exact config types and validation**
 
 Use these JSON fields:
 
@@ -95,7 +95,7 @@ type LLMConfig struct {
 
 Require stable unique IDs, valid HTTP(S) URLs, method `POST`, response mode `json|sse_json`, positive bounded timeouts/sizes, one valid JSON Object BodyTemplate after replacing `_JSON` placeholders with `null`, QuickPath Params as one JSON Object, and existing Provider references. Default IDs are `llama-local` and `local`.
 
-- [ ] **Step 4: Write config migration and runtime update tests**
+- [x] **Step 4: Write config migration and runtime update tests**
 
 ```go
 func TestLoadMigratesSchemaOneAndPreservesRuntimeFields(t *testing.T) {
@@ -121,15 +121,15 @@ func TestRepositoryUpdateLLMPersistsWithPrivatePermissions(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Run config tests and verify RED**
+- [x] **Step 5: Run config tests and verify RED**
 
 Run: `go test ./internal/config -run 'Test(LoadMigrates|RepositoryUpdateLLM)' -count=1 -v`
 
-- [ ] **Step 6: Implement Schema 2 migration and config.Repository**
+- [x] **Step 6: Implement Schema 2 migration and config.Repository**
 
 Migration from 1 copies listen/upload/shutdown values and assigns `provider.DefaultLLMConfig()`. `Repository` serializes updates with a mutex, returns deep copies through JSON-safe clone helpers, and uses existing `Save` for `0600` atomic writes.
 
-- [ ] **Step 7: Verify and commit Task 1**
+- [x] **Step 7: Verify and commit Task 1**
 
 Run: `gofmt -w internal/provider internal/config && go test ./internal/provider ./internal/config -count=1`
 

@@ -6,10 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ekk1/ai-desktop/internal/provider"
 	"github.com/ekk1/ai-desktop/internal/store"
 )
 
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 const (
 	defaultListenPort                   = 8188
@@ -20,10 +21,11 @@ const (
 )
 
 type Config struct {
-	SchemaVersion          int   `json:"schema_version"`
-	ListenPort             int   `json:"listen_port"`
-	ShutdownTimeoutSeconds int   `json:"shutdown_timeout_seconds"`
-	MaxUploadBytes         int64 `json:"max_upload_bytes"`
+	SchemaVersion          int                `json:"schema_version"`
+	ListenPort             int                `json:"listen_port"`
+	ShutdownTimeoutSeconds int                `json:"shutdown_timeout_seconds"`
+	MaxUploadBytes         int64              `json:"max_upload_bytes"`
+	LLM                    provider.LLMConfig `json:"llm"`
 }
 
 func Default() Config {
@@ -32,7 +34,14 @@ func Default() Config {
 		ListenPort:             defaultListenPort,
 		ShutdownTimeoutSeconds: defaultShutdownTimeoutSeconds,
 		MaxUploadBytes:         defaultMaxUploadBytes,
+		LLM:                    provider.DefaultLLMConfig(),
 	}
+}
+
+func (cfg Config) Clone() Config {
+	clone := cfg
+	clone.LLM = cfg.LLM.Clone()
+	return clone
 }
 
 func ResolveDataDir(explicit string) (string, error) {
@@ -110,11 +119,23 @@ func (cfg Config) Validate() error {
 	if cfg.MaxUploadBytes < minimumMaxUploadBytes || cfg.MaxUploadBytes > maximumMaxUploadBytes {
 		return fmt.Errorf("max_upload_bytes must be between %d and %d", minimumMaxUploadBytes, maximumMaxUploadBytes)
 	}
+	if err := cfg.LLM.Validate(); err != nil {
+		return fmt.Errorf("llm: %w", err)
+	}
 	return nil
 }
 
 func migrate(cfg Config) (Config, error) {
-	return Config{}, fmt.Errorf("no migration path from config schema version %d", cfg.SchemaVersion)
+	for cfg.SchemaVersion < CurrentSchemaVersion {
+		switch cfg.SchemaVersion {
+		case 1:
+			cfg.SchemaVersion = 2
+			cfg.LLM = provider.DefaultLLMConfig()
+		default:
+			return Config{}, fmt.Errorf("no migration path from config schema version %d", cfg.SchemaVersion)
+		}
+	}
+	return cfg, nil
 }
 
 func unwrapPathError(err error) error {

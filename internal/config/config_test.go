@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -49,7 +50,7 @@ func TestLoadCreatesDefaultConfigWithPrivatePermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Default()
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("config = %#v, want %#v", got, want)
 	}
 	info, err := os.Stat(path)
@@ -94,5 +95,32 @@ func TestLoadRejectsFutureSchemaVersion(t *testing.T) {
 
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load accepted a future schema version")
+	}
+}
+
+func TestLoadMigratesSchemaOneAndPreservesRuntimeFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	old := []byte(`{"schema_version":1,"listen_port":9001,"shutdown_timeout_seconds":15,"max_upload_bytes":1048576}`)
+	if err := os.WriteFile(path, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 2 || got.ListenPort != 9001 || got.ShutdownTimeoutSeconds != 15 || got.MaxUploadBytes != 1048576 {
+		t.Fatalf("migrated runtime config = %#v", got)
+	}
+	if len(got.LLM.QuickPaths) != 1 || got.LLM.QuickPaths[0].Name != "Local" {
+		t.Fatalf("migrated LLM config = %#v", got.LLM)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded, got) {
+		t.Fatalf("persisted config = %#v, want %#v", reloaded, got)
 	}
 }
