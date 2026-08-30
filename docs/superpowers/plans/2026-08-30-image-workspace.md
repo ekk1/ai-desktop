@@ -842,6 +842,8 @@ git commit -m "docs: record image workspace delivery"
 
 Task 10 verification note (2026-08-31): README now documents the exact Image Provider, Batch/Item, parameter merge, Asset, concurrency and Attempt recovery workflows. The standalone and master designs match delivered behavior and mark phase 5 complete. Full tests, selected race suites, vet, build verification, requirement review, and a real binary HTTP/persistence/SIGINT smoke test all pass.
 
-- [ ] **Step 5: Merge, push and verify remote**
+- [x] **Step 5: Merge, push and verify remote**
 
 Fast-forward the approved feature branch into `main`, rerun `go test ./... -count=1`, mark this final checkbox in a main documentation commit, `git push origin main`, assert `HEAD == origin/main` and clean status, then safely remove the local feature worktree and branch. Preserve the remote feature branch unless the user explicitly requests deletion.
+
+Final delivery note (2026-08-31): `feature/image-workspace` was fast-forwarded into `main`; the merged tree passed the full Go suite before this checklist commit. The remote feature branch is retained as delivery history.
