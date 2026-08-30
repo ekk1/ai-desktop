@@ -728,6 +728,6 @@ git add README.md docs
 git commit -m "docs: record LLM workspace delivery"
 ```
 
-- [ ] **Step 5: Merge, push and verify remote**
+- [x] **Step 5: Merge, push and verify remote**
 
 Fast-forward the approved feature branch into `main`, rerun `go test ./... -count=1`, `git push origin main`, then assert `HEAD == origin/main` and a clean worktree before removing the local feature worktree.
