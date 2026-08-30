@@ -335,6 +335,49 @@ func (repository *Repository) CreateAttempt(batchID, itemID string, input Create
 	return cloneAttempt(created), nil
 }
 
+func (repository *Repository) createFailedAttempt(batchID, itemID string, snapshot Snapshot, failure AttemptError) (Attempt, error) {
+	normalized, err := normalizeSnapshot(snapshot)
+	if err != nil {
+		return Attempt{}, err
+	}
+	if len(failure.Message) > 4096 {
+		return Attempt{}, fmt.Errorf("image attempt error message exceeds 4096 bytes")
+	}
+	id, err := randomID()
+	if err != nil {
+		return Attempt{}, err
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	batch, ok := repository.batches[batchID]
+	if !ok {
+		return Attempt{}, ErrBatchNotFound
+	}
+	position := itemIndex(batch.Items, itemID)
+	if position < 0 {
+		return Attempt{}, ErrItemNotFound
+	}
+	for _, attempt := range batch.Items[position].Attempts {
+		if activeAttemptState(attempt.State) {
+			return Attempt{}, ErrActiveAttempt
+		}
+	}
+	updated := cloneBatch(batch)
+	now := nextTime(batch.UpdatedAt)
+	normalized.CreatedAt = now
+	created := Attempt{
+		ID: id, State: AttemptFailed, Snapshot: normalized, ResultAssetIDs: []string{}, Error: failure,
+		CreatedAt: now, CompletedAt: now,
+	}
+	updated.Items[position].Attempts = append(updated.Items[position].Attempts, created)
+	updated.Items[position].UpdatedAt, updated.UpdatedAt = now, now
+	if err := repository.save(updated); err != nil {
+		return Attempt{}, err
+	}
+	repository.batches[batchID] = updated
+	return cloneAttempt(created), nil
+}
+
 func (repository *Repository) UpdateAttempt(batchID, itemID, attemptID string, input UpdateAttemptInput) (Attempt, error) {
 	normalized, err := normalizeAttemptUpdate(input)
 	if err != nil {
@@ -749,7 +792,7 @@ func allowedAttemptTransition(from, to AttemptState) bool {
 	case AttemptSubmitting:
 		return to == AttemptPolling || to == AttemptFailed || to == AttemptCancelled
 	case AttemptPolling:
-		return to == AttemptSucceeded || to == AttemptFailed || to == AttemptCancelled
+		return to == AttemptPolling || to == AttemptSucceeded || to == AttemptFailed || to == AttemptCancelled
 	default:
 		return false
 	}

@@ -518,7 +518,7 @@ func (m *Manager) SubscribeBatch(batchID string) (<-chan AttemptEvent,func(),err
 func (m *Manager) Shutdown(context.Context) error
 ```
 
-- [ ] **Step 1: Write failing ordered batch and Provider concurrency tests**
+- [x] **Step 1: Write failing ordered batch and Provider concurrency tests**
 
 ```go
 func TestManagerRunsBatchInOrderWithinProviderConcurrency(t *testing.T) {
@@ -535,15 +535,15 @@ func TestManagerRunsBatchInOrderWithinProviderConcurrency(t *testing.T) {
 
 Add named tests `TestManagerSharesProviderSemaphoreAcrossBatches`, `TestManagerHonorsLowerBatchConcurrency`, and `TestManagerRejectsDisabledMissingProviderAndActiveItem`. The fake RemoteClient records active calls under a mutex and exposes a release channel so each assertion is deterministic.
 
-- [ ] **Step 2: Run Manager scheduling tests and verify RED**
+- [x] **Step 2: Run Manager scheduling tests and verify RED**
 
 Run: `go test ./internal/imagegen -run 'TestManager(Runs|Shares|Rejects)' -count=1 -v`
 
-- [ ] **Step 3: Implement scheduling and immutable preflight snapshots**
+- [x] **Step 3: Implement scheduling and immutable preflight snapshots**
 
 `StartBatch` visits Item Order and creates one queued Attempt for each Item without active Attempt. `StartItem` creates a fresh Attempt even after terminal history, but rejects an active latest Attempt. Build and persist Snapshot before enqueuing; if Build fails, persist a failed Attempt with bounded error. Manager owns one semaphore per Provider ID and a Batch semaphore per active batch configuration.
 
-- [ ] **Step 4: Write failing poll/import/partial result tests**
+- [x] **Step 4: Write failing poll/import/partial result tests**
 
 ```go
 func TestManagerImportsEveryCompletedImageAsArchiveAsset(t *testing.T) {
@@ -560,15 +560,15 @@ func TestManagerImportsEveryCompletedImageAsArchiveAsset(t *testing.T) {
 
 Add PNG/JPEG/WebP sniff tests, invalid Base64, single-image limit, format mismatch and partial second-image failure retaining the first Asset while Attempt becomes failed.
 
-- [ ] **Step 5: Run poll/import tests and verify RED**
+- [x] **Step 5: Run poll/import tests and verify RED**
 
 Run: `go test ./internal/imagegen -run 'TestManagerImports|TestManagerRejectsInvalidResult|TestManagerRetainsPartial' -count=1 -v`
 
-- [ ] **Step 6: Implement submit/poll/result import state machine**
+- [x] **Step 6: Implement submit/poll/result import state machine**
 
 Use JobTimeout Context from Provider snapshot. Persist submitting, Submit, RemoteJobID/polling, each changed remote status/queue position, then terminal state. Poll with resettable `time.Timer`, not `time.Sleep`. Decode each Base64 with `base64.StdEncoding.Strict`, enforce decoded size before `asset.Import`, sniff PNG/JPEG/WebP signatures and call `Service.AttachResult` immediately after each import.
 
-- [ ] **Step 7: Write failing cancellation, subscription and shutdown tests**
+- [x] **Step 7: Write failing cancellation, subscription and shutdown tests**
 
 ```go
 func TestManagerCancelCallsRemoteAndPublishesTerminalState(t *testing.T) {
@@ -584,15 +584,15 @@ func TestManagerCancelCallsRemoteAndPublishesTerminalState(t *testing.T) {
 
 Add queued cancellation without remote call, 409 followed by completed Job import, initial subscription snapshots, slow subscriber bounded behavior, Shutdown refusing new jobs and waiting, and Context cancellation marking active Attempts cancelled rather than succeeded.
 
-- [ ] **Step 8: Run cancellation/subscription/shutdown tests and verify RED**
+- [x] **Step 8: Run cancellation/subscription/shutdown tests and verify RED**
 
 Run: `go test ./internal/imagegen -run 'TestManager(Cancel|Subscribe|Shutdown)' -count=1 -v`
 
-- [ ] **Step 9: Implement cancellation/events/shutdown**
+- [x] **Step 9: Implement cancellation/events/shutdown**
 
 Index active Attempt cancel funcs by ID and batch subscribers by Batch ID. `SubscribeBatch` first emits latest Attempts in Item order. On terminal close only that Attempt's worker; batch stream stays available until subscriber disconnect. `Shutdown` flips accepting false, cancels workers, best-effort cancels remote Jobs within the caller deadline, and waits on one WaitGroup.
 
-- [ ] **Step 10: Verify race safety and commit Task 6**
+- [x] **Step 10: Verify race safety and commit Task 6**
 
 Run: `gofmt -w internal/imagegen && go test -race ./internal/imagegen ./internal/sdcpp -count=1 && git diff --check`
 
@@ -600,6 +600,8 @@ Run: `gofmt -w internal/imagegen && go test -race ./internal/imagegen ./internal
 git add internal/imagegen
 git commit -m "feat: manage image generation jobs"
 ```
+
+Task 6 completion note (2026-08-31): the Manager now serializes worker/cancel recovery transitions, keeps concurrency limits resizable without replacing active permits, retries terminal persistence with backoff, preserves partial Asset results, and waits for accepted starts during shutdown. Full repository tests, race tests, vet, diff checks, and focused code review passed before commit.
 
 ### Task 7: Image Config、Batch、Attempt API 和 App 生命周期
 

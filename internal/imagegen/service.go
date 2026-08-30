@@ -164,6 +164,12 @@ func (service *Service) CreateAttempt(batchID, itemID string, input CreateAttemp
 	return service.repository.CreateAttempt(batchID, itemID, input)
 }
 
+func (service *Service) createFailedAttempt(batchID, itemID string, snapshot Snapshot, failure AttemptError) (Attempt, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return service.repository.createFailedAttempt(batchID, itemID, snapshot, failure)
+}
+
 func (service *Service) UpdateAttempt(batchID, itemID, attemptID string, input UpdateAttemptInput) (Attempt, error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
