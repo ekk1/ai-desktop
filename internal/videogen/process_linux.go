@@ -197,8 +197,13 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 	command.Dir = request.WorkDir
 	command.Env = append(os.Environ(), sortedEnvironment(request.Env)...)
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
-	command.Stdout = attempt.log
-	command.Stderr = attempt.log
+	logRead, logWrite, err := os.Pipe()
+	if err != nil {
+		return -1, fmt.Errorf("create video CLI log pipe: %w", err)
+	}
+	defer logRead.Close()
+	command.Stdout = logWrite
+	command.Stderr = logWrite
 
 	// Serialize the stop-request check with Start and PID publication. Stop
 	// either prevents this group from being created or observes its real PID;
@@ -209,14 +214,24 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 		return -1, nil
 	}
 	if err := command.Start(); err != nil {
+		_ = logWrite.Close()
 		executor.mu.Unlock()
 		return -1, fmt.Errorf("start video CLI %s command: %w", state, err)
+	}
+	if err := logWrite.Close(); err != nil {
+		executor.mu.Unlock()
+		return -1, fmt.Errorf("close parent video CLI log pipe: %w", err)
 	}
 	attempt.cmd = command
 	attempt.awaitingMain = false
 	attempt.result.State = state
 	attempt.result.PID = command.Process.Pid
 	executor.mu.Unlock()
+	logDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(attempt.log, logRead)
+		close(logDone)
+	}()
 
 	waited := make(chan commandOutcome, 1)
 	go func() {
@@ -226,6 +241,7 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 		if command.ProcessState != nil {
 			exitCode = command.ProcessState.ExitCode()
 		}
+		<-logDone
 		executor.mu.Lock()
 		executor.publishCommandCompletionLocked(attempt, exitCode)
 		executor.mu.Unlock()
