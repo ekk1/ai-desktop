@@ -41,6 +41,22 @@ func TestWorkspacePreparesOrderedSelectedAssetsAndManifest(t *testing.T) {
 	assertWorkspaceManifest(t, workspace.ManifestPath, workspaceAttemptID, snapshot.InputAssets)
 }
 
+// This fails if a caller that already supplies the fixed video-workspace root
+// receives a second nested video-workspace directory.
+func TestWorkspaceUsesConfiguredFixedRootExactlyOnce(t *testing.T) {
+	manager, _ := workspaceFixture(t)
+	workspace, err := manager.Prepare(workspaceAttemptID, validWorkspaceSnapshot(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := workspace.Root, filepath.Join(manager.root, workspaceAttemptID); got != want {
+		t.Fatalf("workspace root = %q, want %q", got, want)
+	}
+	if strings.Count(workspace.Root, "video-workspace") != 1 {
+		t.Fatalf("workspace root contains duplicate workspace segment: %q", workspace.Root)
+	}
+}
+
 // This fails if a cross-device hard-link error does not copy the exact asset
 // bytes and record that fallback in the manifest.
 func TestWorkspaceCopiesAfterCrossDeviceLinkFailureAndVerifiesHash(t *testing.T) {
@@ -66,7 +82,7 @@ func TestWorkspaceCopiesAfterCrossDeviceLinkFailureAndVerifiesHash(t *testing.T)
 // workspace path.
 func TestWorkspaceRejectsUnsafeAttemptIDs(t *testing.T) {
 	manager, _ := workspaceFixture(t)
-	for _, attemptID := range []string{"", "../" + workspaceAttemptID, strings.Repeat("z", 32), workspaceAttemptID + "/x"} {
+	for _, attemptID := range []string{"", "../" + workspaceAttemptID, strings.Repeat("z", 32), strings.ToUpper(workspaceAttemptID), workspaceAttemptID + "/x"} {
 		if _, err := manager.Prepare(attemptID, validWorkspaceSnapshot(nil)); err == nil {
 			t.Fatalf("Prepare accepted unsafe attempt ID %q", attemptID)
 		}
@@ -162,7 +178,7 @@ func workspaceFixture(t *testing.T) (*WorkspaceManager, *asset.Repository) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewWorkspaceManager(root, assets), assets
+	return NewWorkspaceManager(filepath.Join(root, "video-workspace"), assets), assets
 }
 
 func validWorkspaceSnapshot(inputs []AssetSnapshot) Snapshot {
@@ -185,9 +201,12 @@ func assertWorkspaceManifest(t *testing.T, path, attemptID string, want []AssetS
 		t.Fatalf("manifest = %#v", manifest)
 	}
 	for index, input := range manifest.Inputs {
-		if input.AssetID != want[index].ID || input.SHA256 != want[index].SHA256 || filepath.IsAbs(input.Path) || strings.Contains(input.Path, "..") {
+		if input.AssetID != want[index].ID || input.SHA256 != want[index].SHA256 || input.MediaType != want[index].MediaType || input.Size != want[index].Size || filepath.IsAbs(input.Path) || strings.Contains(input.Path, "..") {
 			t.Fatalf("manifest input %d = %#v", index, input)
 		}
+	}
+	if strings.Contains(string(contents), "\n") || strings.Contains(string(contents), "  ") {
+		t.Fatalf("manifest is not compact JSON: %q", contents)
 	}
 	info, err := os.Stat(path)
 	if err != nil {

@@ -3,6 +3,7 @@ package videogen
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,6 @@ import (
 	"syscall"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
-	"github.com/ekk1/ai-desktop/internal/store"
 	"github.com/ekk1/ai-desktop/internal/videoconfig"
 )
 
@@ -47,12 +47,14 @@ type Manifest struct {
 }
 
 type ManifestInput struct {
-	AssetID string `json:"asset_id"`
-	SHA256  string `json:"sha256"`
-	Role    string `json:"role"`
-	Order   int    `json:"order"`
-	Path    string `json:"path"`
-	Method  string `json:"method"`
+	AssetID   string `json:"asset_id"`
+	SHA256    string `json:"sha256"`
+	MediaType string `json:"media_type"`
+	Size      int64  `json:"size"`
+	Role      string `json:"role"`
+	Order     int    `json:"order"`
+	Path      string `json:"path"`
+	Method    string `json:"method"`
 }
 
 // WorkspaceManager owns the fixed local workspace root. Link may be replaced
@@ -71,7 +73,7 @@ func (manager *WorkspaceManager) Prepare(attemptID string, snapshot Snapshot) (w
 	if manager == nil || manager.assets == nil || strings.TrimSpace(manager.root) == "" {
 		return Workspace{}, fmt.Errorf("video workspace manager requires an asset repository and root")
 	}
-	if !validGeneratedID(attemptID) {
+	if !validWorkspaceAttemptID(attemptID) {
 		return Workspace{}, fmt.Errorf("video workspace attempt ID is invalid")
 	}
 	if snapshot.ExecutionKind != videoconfig.ExecutionLocalCLI || snapshot.CLIPreset == nil || snapshot.HTTPProvider != nil {
@@ -86,7 +88,7 @@ func (manager *WorkspaceManager) Prepare(attemptID string, snapshot Snapshot) (w
 		return Workspace{}, err
 	}
 
-	base := filepath.Join(filepath.Clean(manager.root), "video-workspace")
+	base := filepath.Clean(manager.root)
 	root := filepath.Join(base, attemptID)
 	if !workspaceAttemptPath(base, root, attemptID) {
 		return Workspace{}, fmt.Errorf("video workspace path is outside its root")
@@ -125,9 +127,9 @@ func (manager *WorkspaceManager) Prepare(attemptID string, snapshot Snapshot) (w
 		if err != nil || filepath.IsAbs(relativePath) || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
 			return Workspace{}, fmt.Errorf("staged input escaped workspace")
 		}
-		manifest.Inputs = append(manifest.Inputs, ManifestInput{AssetID: staged.AssetID, SHA256: staged.SHA256, Role: staged.Role, Order: staged.Order, Path: relativePath, Method: staged.Method})
+		manifest.Inputs = append(manifest.Inputs, ManifestInput{AssetID: staged.AssetID, SHA256: staged.SHA256, MediaType: input.MediaType, Size: input.Size, Role: staged.Role, Order: staged.Order, Path: relativePath, Method: staged.Method})
 	}
-	if err := store.WriteJSON(workspace.ManifestPath, manifest, 0o600); err != nil {
+	if err := writeWorkspaceManifest(workspace.ManifestPath, manifest); err != nil {
 		return Workspace{}, fmt.Errorf("write video workspace manifest: %w", err)
 	}
 	completed = true
@@ -135,10 +137,10 @@ func (manager *WorkspaceManager) Prepare(attemptID string, snapshot Snapshot) (w
 }
 
 func (manager *WorkspaceManager) Cleanup(attemptID string) error {
-	if manager == nil || strings.TrimSpace(manager.root) == "" || !validGeneratedID(attemptID) {
+	if manager == nil || strings.TrimSpace(manager.root) == "" || !validWorkspaceAttemptID(attemptID) {
 		return fmt.Errorf("video workspace attempt ID is invalid")
 	}
-	base := filepath.Join(filepath.Clean(manager.root), "video-workspace")
+	base := filepath.Clean(manager.root)
 	root := filepath.Join(base, attemptID)
 	if !workspaceAttemptPath(base, root, attemptID) {
 		return fmt.Errorf("video workspace cleanup path is outside its root")
@@ -166,6 +168,51 @@ func workspaceInputs(source []AssetSnapshot) ([]AssetSnapshot, error) {
 	}
 	sort.Slice(inputs, func(left, right int) bool { return inputs[left].Order < inputs[right].Order })
 	return inputs, nil
+}
+
+func validWorkspaceAttemptID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, character := range id {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func writeWorkspaceManifest(path string, manifest Manifest) (err error) {
+	contents, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("encode video workspace manifest: %w", err)
+	}
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".manifest-*")
+	if err != nil {
+		return fmt.Errorf("create video workspace manifest: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("protect video workspace manifest: %w", err)
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		return fmt.Errorf("write video workspace manifest: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync video workspace manifest: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close video workspace manifest: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace video workspace manifest: %w", err)
+	}
+	return nil
 }
 
 func (manager *WorkspaceManager) stageInput(inputDir, attemptID string, snapshot AssetSnapshot) (StagedInput, error) {
