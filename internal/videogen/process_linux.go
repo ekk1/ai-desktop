@@ -604,7 +604,7 @@ func validateCLIOutput(request CLIRunRequest) (int64, error) {
 		return 0, fmt.Errorf("parse video CLI output media type: %w", err)
 	}
 	wantExtension, magic := cliOutputFormat(strings.ToLower(mediaType))
-	if wantExtension == "" || !strings.EqualFold(request.OutputExtension, wantExtension) {
+	if wantExtension == "" || !outputExtensionMatchesMediaType(request.OutputExtension, wantExtension) {
 		return 0, fmt.Errorf("video CLI output MIME and extension do not match")
 	}
 
@@ -747,6 +747,14 @@ func cliOutputFormat(mediaType string) (string, func([]byte) bool) {
 		return ".webp", func(header []byte) bool {
 			return len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP"
 		}
+	case "image/png":
+		return ".png", func(header []byte) bool {
+			return len(header) >= 8 && string(header[:8]) == "\x89PNG\r\n\x1a\n"
+		}
+	case "image/jpeg":
+		return ".jpg", func(header []byte) bool {
+			return len(header) >= 3 && header[0] == 0xff && header[1] == 0xd8 && header[2] == 0xff
+		}
 	case "video/mp4":
 		return ".mp4", isoBMFFMagic
 	case "video/quicktime":
@@ -758,6 +766,10 @@ func cliOutputFormat(mediaType string) (string, func([]byte) bool) {
 
 func isoBMFFMagic(header []byte) bool {
 	return len(header) >= 12 && string(header[4:8]) == "ftyp"
+}
+
+func outputExtensionMatchesMediaType(extension, expected string) bool {
+	return strings.EqualFold(extension, expected) || expected == ".jpg" && strings.EqualFold(extension, ".jpeg")
 }
 
 func writeVideoLog(destination string, contents []byte) (err error) {

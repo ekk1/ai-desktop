@@ -393,6 +393,9 @@ func TestCLIExecutorAcceptsSupportedDeclaredOutputs(t *testing.T) {
 		{"webm", "video/webm", ".webm", `\x1a\x45\xdf\xa3`, 4},
 		{"avi", "video/x-msvideo", ".avi", `RIFF\x04\x00\x00\x00AVI `, 12},
 		{"webp", "image/webp", ".webp", `RIFF\x04\x00\x00\x00WEBP`, 12},
+		{"png", "image/png", ".png", `\x89PNG\r\n\x1a\n`, 8},
+		{"jpeg", "image/jpeg", ".jpg", `\xff\xd8\xff\xe0`, 4},
+		{"jpeg alias", "image/jpeg", ".jpeg", `\xff\xd8\xff\xe0`, 4},
 		{"mp4", "video/mp4", ".mp4", `\x00\x00\x00\x0cftypisom`, 12},
 		{"mov", "video/quicktime", ".mov", `\x00\x00\x00\x0cftypqt  `, 12},
 	}
