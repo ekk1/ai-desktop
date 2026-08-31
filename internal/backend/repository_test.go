@@ -1,7 +1,9 @@
 package backend
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -50,6 +52,58 @@ func TestRepositoryPersistsProfileCRUD(t *testing.T) {
 	}
 	if _, err := OpenRepository(path); err != nil {
 		t.Fatalf("open after delete: %v", err)
+	}
+}
+
+func TestOpenRepositoryMigratesVersionOneExecutionToLocal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backends", "profiles.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"schema_version":1,"profiles":[{"id":"local-one","name":"Local","command":"echo ok","readiness":{"kind":"none","timeout_seconds":60},"stop_grace_seconds":10,"log_buffer_bytes":1048576}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := OpenRepository(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, ok := repository.Get("local-one")
+	if !ok || profile.Execution.Kind != ExecutionLocal {
+		t.Fatalf("migrated profile = %#v, found = %v", profile, ok)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		SchemaVersion int       `json:"schema_version"`
+		Profiles      []Profile `json:"profiles"`
+	}
+	if err := json.Unmarshal(contents, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.SchemaVersion != 2 || len(saved.Profiles) != 1 || saved.Profiles[0].Execution.Kind != ExecutionLocal {
+		t.Fatalf("saved migration = %#v", saved)
+	}
+}
+
+func TestRepositoryNormalizesEmptyExecutionToLocal(t *testing.T) {
+	repository, err := OpenRepository(filepath.Join(t.TempDir(), "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := DefaultProfile()
+	profile.Name = "legacy API input"
+	profile.Command = "echo ok"
+	profile.Execution = Execution{}
+	created, err := repository.Create(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Execution.Kind != ExecutionLocal {
+		t.Fatalf("execution kind = %q", created.Execution.Kind)
 	}
 }
 

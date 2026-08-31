@@ -13,7 +13,7 @@ import (
 	"github.com/ekk1/ai-desktop/internal/store"
 )
 
-const profileSchemaVersion = 1
+const profileSchemaVersion = 2
 
 var (
 	ErrNotFound = errors.New("backend profile not found")
@@ -42,8 +42,14 @@ func OpenRepository(path string) (*Repository, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	if document.SchemaVersion != profileSchemaVersion {
-		return nil, fmt.Errorf("backend profile schema version %d is unsupported", document.SchemaVersion)
+	migrated, err := migrateProfileDocument(&document)
+	if err != nil {
+		return nil, err
+	}
+	if migrated {
+		if err := store.WriteJSON(path, document, 0o600); err != nil {
+			return nil, fmt.Errorf("save migrated backend profiles: %w", err)
+		}
 	}
 	seen := make(map[string]struct{}, len(document.Profiles))
 	for _, profile := range document.Profiles {
@@ -83,6 +89,7 @@ func (repository *Repository) Get(id string) (Profile, bool) {
 }
 
 func (repository *Repository) Create(profile Profile) (Profile, error) {
+	profile = normalizeProfile(profile)
 	if err := profile.Validate(); err != nil {
 		return Profile{}, err
 	}
@@ -110,6 +117,7 @@ func (repository *Repository) Create(profile Profile) (Profile, error) {
 
 func (repository *Repository) Update(id string, profile Profile) (Profile, error) {
 	profile.ID = id
+	profile = normalizeProfile(profile)
 	if err := profile.Validate(); err != nil {
 		return Profile{}, err
 	}
@@ -132,6 +140,21 @@ func (repository *Repository) Update(id string, profile Profile) (Profile, error
 	}
 	repository.profiles = updated
 	return cloneProfile(profile), nil
+}
+
+func migrateProfileDocument(document *profileDocument) (bool, error) {
+	switch document.SchemaVersion {
+	case 1:
+		for index := range document.Profiles {
+			document.Profiles[index] = normalizeProfile(document.Profiles[index])
+		}
+		document.SchemaVersion = profileSchemaVersion
+		return true, nil
+	case profileSchemaVersion:
+		return false, nil
+	default:
+		return false, fmt.Errorf("backend profile schema version %d is unsupported", document.SchemaVersion)
+	}
 }
 
 func (repository *Repository) Delete(id string) error {

@@ -14,6 +14,16 @@ const (
 	ReadinessLogRegex = "log_regex"
 )
 
+const (
+	ExecutionLocal  = "local"
+	ExecutionWorker = "worker"
+)
+
+type Execution struct {
+	Kind          string `json:"kind"`
+	WorkerBaseURL string `json:"worker_base_url,omitempty"`
+}
+
 type Readiness struct {
 	Kind           string `json:"kind"`
 	DelaySeconds   int    `json:"delay_seconds,omitempty"`
@@ -34,6 +44,7 @@ type Profile struct {
 	Readiness        Readiness         `json:"readiness"`
 	StopGraceSeconds int               `json:"stop_grace_seconds"`
 	LogBufferBytes   int               `json:"log_buffer_bytes"`
+	Execution        Execution         `json:"execution"`
 }
 
 func DefaultProfile() Profile {
@@ -46,6 +57,7 @@ func DefaultProfile() Profile {
 		},
 		StopGraceSeconds: 10,
 		LogBufferBytes:   1 << 20,
+		Execution:        Execution{Kind: ExecutionLocal},
 	}
 }
 
@@ -72,7 +84,45 @@ func (profile Profile) Validate() error {
 			return fmt.Errorf("invalid template variable name %q", key)
 		}
 	}
-	return profile.Readiness.validate()
+	if err := profile.Readiness.validate(); err != nil {
+		return err
+	}
+	execution := profile.Execution
+	if execution.Kind == "" {
+		execution.Kind = ExecutionLocal
+	}
+	return execution.validate()
+}
+
+func (execution Execution) validate() error {
+	switch execution.Kind {
+	case ExecutionLocal:
+		if execution.WorkerBaseURL != "" {
+			return fmt.Errorf("execution worker_base_url must be empty for local execution")
+		}
+		return nil
+	case ExecutionWorker:
+		if len(execution.WorkerBaseURL) > 8192 {
+			return fmt.Errorf("execution worker_base_url exceeds 8192 bytes")
+		}
+		parsed, err := url.Parse(execution.WorkerBaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf("execution worker_base_url must be an absolute HTTP URL")
+		}
+		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+			return fmt.Errorf("execution worker_base_url must not contain credentials, a path, query, or fragment")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported execution kind %q", execution.Kind)
+	}
+}
+
+func normalizeProfile(profile Profile) Profile {
+	if profile.Execution.Kind == "" {
+		profile.Execution.Kind = ExecutionLocal
+	}
+	return profile
 }
 
 func (readiness Readiness) validate() error {
