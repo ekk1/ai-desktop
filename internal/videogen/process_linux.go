@@ -202,6 +202,7 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 		return -1, fmt.Errorf("create video CLI log pipe: %w", err)
 	}
 	defer logRead.Close()
+	defer logWrite.Close()
 	command.Stdout = logWrite
 	command.Stderr = logWrite
 
@@ -218,10 +219,7 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 		executor.mu.Unlock()
 		return -1, fmt.Errorf("start video CLI %s command: %w", state, err)
 	}
-	if err := logWrite.Close(); err != nil {
-		executor.mu.Unlock()
-		return -1, fmt.Errorf("close parent video CLI log pipe: %w", err)
-	}
+	_ = logWrite.Close()
 	attempt.cmd = command
 	attempt.awaitingMain = false
 	attempt.result.State = state
