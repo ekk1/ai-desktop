@@ -31,7 +31,7 @@
 - 有限并发、不可变 Attempt 快照、SSE 状态、取消、重试与中断恢复
 - 五类图片 Asset 输入、结果自动归档和一键精选
 
-视频生成是下一阶段，将按[总体设计](docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md)独立接入。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
+下一阶段先交付可选的[远端进程 Worker](docs/superpowers/specs/2026-08-31-remote-worker-design.md)，再按独立的[视频工作区设计](docs/superpowers/specs/2026-08-31-video-workspace-design.md)接入视频生成。Worker 只经 SSH 隧道控制一个云端进程组，不传输 Prompt、Asset 或结果；生成请求通过另一条隧道直达模型 Server。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
 
 ## 要求
 
