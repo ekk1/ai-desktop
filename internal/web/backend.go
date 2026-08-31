@@ -1,14 +1,17 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ekk1/ai-desktop/internal/backend"
+	"github.com/ekk1/ai-desktop/internal/worker"
 )
 
 type backendHandler struct {
@@ -22,6 +25,10 @@ func (handler backendHandler) serve(response http.ResponseWriter, request *http.
 	path = strings.Trim(path, "/")
 	if path == "" {
 		handler.serveCollection(response, request)
+		return
+	}
+	if path == "worker/test" {
+		handler.testWorker(response, request)
 		return
 	}
 	segments := strings.Split(path, "/")
@@ -49,6 +56,32 @@ func (handler backendHandler) serve(response http.ResponseWriter, request *http.
 	default:
 		writeAPIError(response, http.StatusNotFound, "not_found", "resource not found")
 	}
+}
+
+func (handler backendHandler) testWorker(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		handler.methodNotAllowed(response, http.MethodPost)
+		return
+	}
+	var input struct {
+		WorkerBaseURL string `json:"worker_base_url"`
+	}
+	if !handler.decode(response, request, &input, false) {
+		return
+	}
+	execution := backend.Execution{Kind: backend.ExecutionWorker, WorkerBaseURL: input.WorkerBaseURL}
+	if err := execution.Validate(); err != nil {
+		writeAPIError(response, http.StatusBadRequest, "invalid_worker_url", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 3*time.Second)
+	defer cancel()
+	health, err := (worker.Client{BaseURL: input.WorkerBaseURL, MaxResponseBytes: 1 << 20}).Health(ctx)
+	if err != nil {
+		writeAPIError(response, http.StatusBadGateway, "worker_unreachable", err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, health)
 }
 
 func (handler backendHandler) serveCollection(response http.ResponseWriter, request *http.Request) {
@@ -246,11 +279,14 @@ func (handler backendHandler) methodNotAllowed(response http.ResponseWriter, all
 }
 
 func (handler backendHandler) writeError(response http.ResponseWriter, err error) {
+	var workerError *worker.ClientError
 	switch {
 	case errors.Is(err, backend.ErrNotFound), errors.Is(err, backend.ErrNotRunning):
 		writeAPIError(response, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, backend.ErrConflict), errors.Is(err, backend.ErrRunning):
 		writeAPIError(response, http.StatusConflict, "conflict", err.Error())
+	case errors.As(err, &workerError) && workerError.StatusCode == http.StatusConflict:
+		writeAPIError(response, http.StatusConflict, "worker_conflict", workerError.Message)
 	default:
 		writeAPIError(response, http.StatusBadRequest, "invalid_backend", err.Error())
 	}

@@ -557,7 +557,8 @@ button:disabled {
   color: var(--success);
 }
 
-.state-pill[data-state="failed"] {
+.state-pill[data-state="failed"],
+.state-pill[data-state="interrupted"] {
   color: #b85045;
 }
 
@@ -710,6 +711,11 @@ summary {
   resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   line-height: 1.45;
+}
+
+.backend-worker-test {
+  align-self: end;
+  justify-self: start;
 }
 
 .full-width {

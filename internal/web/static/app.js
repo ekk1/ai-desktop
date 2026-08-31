@@ -83,6 +83,10 @@ const backendUI = {
   pid: document.querySelector("#backend-pid"),
   uptime: document.querySelector("#backend-uptime"),
   workdir: document.querySelector("#backend-workdir"),
+  execution: document.querySelector("#backend-execution-summary"),
+  workerInstance: document.querySelector("#backend-worker-instance"),
+  workerRun: document.querySelector("#backend-worker-run"),
+  workerConnection: document.querySelector("#backend-worker-connection"),
   log: document.querySelector("#backend-log"),
   logSearch: document.querySelector("#backend-log-search"),
   logFollow: document.querySelector("#backend-log-follow"),
@@ -176,6 +180,7 @@ function stateLabel(run) {
     stopping: "停止中",
     stopped: "已停止",
     failed: "异常退出",
+    interrupted: "已中断",
   }[run.state] ?? run.state;
 }
 
@@ -210,7 +215,8 @@ function renderBackendList() {
     const name = document.createElement("strong");
     name.textContent = profile.name;
     const state = document.createElement("small");
-    state.textContent = stateLabel(run);
+    const location = profile.execution?.kind === "worker" ? "远端" : "本机";
+    state.textContent = `${location} · ${stateLabel(run)}`;
     button.append(name, state);
     button.addEventListener("click", () => {
       selectedBackendID = profile.id;
@@ -233,6 +239,10 @@ function renderSelectedBackend() {
     backendUI.pid.textContent = "—";
     backendUI.uptime.textContent = "—";
     backendUI.workdir.textContent = "—";
+    backendUI.execution.textContent = "—";
+    backendUI.workerInstance.textContent = "—";
+    backendUI.workerRun.textContent = "—";
+    backendUI.workerConnection.textContent = "—";
     for (const control of [backendUI.start, backendUI.stop, backendUI.edit, backendUI.copy, backendUI.delete, backendUI.logSave, backendUI.logClear]) {
       control.disabled = true;
     }
@@ -250,6 +260,13 @@ function renderSelectedBackend() {
   backendUI.pid.textContent = run?.pid ? String(run.pid) : "—";
   backendUI.uptime.textContent = formatUptime(run);
   backendUI.workdir.textContent = profile.work_dir || "继承工作台目录";
+  const remote = profile.execution?.kind === "worker";
+  backendUI.execution.textContent = remote ? `远端 · ${profile.execution.worker_base_url}` : "本机";
+  backendUI.workerInstance.textContent = run?.worker_instance_id || "—";
+  backendUI.workerRun.textContent = run?.worker_run_id || "—";
+  backendUI.workerConnection.textContent = remote
+    ? ({ connected: "已连接", unknown: "连接未知" }[run?.connection_state] ?? "未连接")
+    : "不适用";
   const active = isActiveRun(run);
   backendUI.start.disabled = active;
   backendUI.stop.disabled = !active;
@@ -258,7 +275,9 @@ function renderSelectedBackend() {
   backendUI.delete.disabled = active;
   backendUI.logSave.disabled = !run;
   backendUI.logClear.disabled = !run;
-  backendUI.actionMessage.textContent = run?.error || "";
+  backendUI.actionMessage.textContent = run?.connection_error
+    ? `Worker 控制连接：${run.connection_error}`
+    : (run?.error || "");
   connectBackendLog(profile.id, Boolean(run));
 }
 
@@ -348,6 +367,8 @@ function openBackendEditor(profile = null) {
   document.querySelector("#backend-description").value = profile?.description ?? "";
   document.querySelector("#backend-command").value = profile?.command ?? "";
   document.querySelector("#backend-work-dir").value = profile?.work_dir ?? "";
+  document.querySelector("#backend-execution-kind").value = profile?.execution?.kind ?? "local";
+  document.querySelector("#backend-worker-url").value = profile?.execution?.worker_base_url ?? "";
   document.querySelector("#backend-env").value = JSON.stringify(profile?.env ?? {}, null, 2);
   document.querySelector("#backend-variables").value = JSON.stringify(profile?.variables ?? {}, null, 2);
   document.querySelector("#backend-readiness-kind").value = profile?.readiness?.kind ?? "none";
@@ -356,7 +377,34 @@ function openBackendEditor(profile = null) {
   document.querySelector("#backend-stop-grace").value = String(profile?.stop_grace_seconds ?? 10);
   document.querySelector("#backend-log-capacity").value = String(profile?.log_buffer_bytes ?? 1048576);
   document.querySelector("#backend-form-error").textContent = "";
+  document.querySelector("#backend-worker-test-result").textContent = "";
+  updateBackendExecutionFields();
   backendEditor.showModal();
+}
+
+function updateBackendExecutionFields() {
+  const remote = document.querySelector("#backend-execution-kind").value === "worker";
+  document.querySelector("#backend-worker-url-field").hidden = !remote;
+  document.querySelector("#backend-worker-test").hidden = !remote;
+  if (!remote) document.querySelector("#backend-worker-test-result").textContent = "";
+}
+
+async function testBackendWorkerConnection() {
+  const result = document.querySelector("#backend-worker-test-result");
+  const workerBaseURL = document.querySelector("#backend-worker-url").value.trim();
+  result.textContent = "正在连接…";
+  try {
+    const response = await fetch("/api/v1/backends/worker/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ worker_base_url: workerBaseURL }),
+    });
+    if (!response.ok) throw new Error(await readAPIError(response));
+    const health = await response.json();
+    result.textContent = `连接成功 · ${health.version} · ${health.instance_id}`;
+  } catch (error) {
+    result.textContent = `连接失败：${error.message}`;
+  }
 }
 
 function readinessValue(readiness) {
@@ -402,6 +450,9 @@ async function saveBackend(event) {
       work_dir: document.querySelector("#backend-work-dir").value.trim(),
       env: readJSONMap("#backend-env"),
       variables: readJSONMap("#backend-variables"),
+      execution: document.querySelector("#backend-execution-kind").value === "worker"
+        ? { kind: "worker", worker_base_url: document.querySelector("#backend-worker-url").value.trim() }
+        : { kind: "local" },
       readiness: buildReadiness(),
       stop_grace_seconds: Number(document.querySelector("#backend-stop-grace").value),
       log_buffer_bytes: Number(document.querySelector("#backend-log-capacity").value),
@@ -997,6 +1048,8 @@ backendUI.logSave.addEventListener("click", async () => {
     backendUI.actionMessage.textContent = error.message;
   }
 });
+document.querySelector("#backend-execution-kind").addEventListener("change", updateBackendExecutionFields);
+document.querySelector("#backend-worker-test").addEventListener("click", testBackendWorkerConnection);
 backendForm.addEventListener("submit", saveBackend);
 document.querySelector("#backend-editor-close").addEventListener("click", () => backendEditor.close());
 document.querySelector("#backend-editor-cancel").addEventListener("click", () => backendEditor.close());

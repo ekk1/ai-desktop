@@ -215,7 +215,7 @@
         <section class="backend-workspace" id="backend-workspace" hidden>
           <div class="backend-toolbar">
             <div>
-              <p class="section-kicker">本地进程</p>
+              <p class="section-kicker">进程控制</p>
               <h2>后端配置</h2>
             </div>
             <div class="button-row">
@@ -255,6 +255,10 @@
                   <div><dt>PID</dt><dd id="backend-pid">—</dd></div>
                   <div><dt>运行时间</dt><dd id="backend-uptime">—</dd></div>
                   <div><dt>工作目录</dt><dd id="backend-workdir">—</dd></div>
+                  <div><dt>执行位置</dt><dd id="backend-execution-summary">—</dd></div>
+                  <div><dt>Worker Instance</dt><dd id="backend-worker-instance">—</dd></div>
+                  <div><dt>Worker Run</dt><dd id="backend-worker-run">—</dd></div>
+                  <div><dt>控制连接</dt><dd id="backend-worker-connection">—</dd></div>
                 </dl>
               </details>
 
@@ -468,8 +472,19 @@
       </div>
 
       <details class="advanced-form">
-        <summary>环境变量、模板变量与就绪检测</summary>
+        <summary>执行位置、环境变量与高级设置</summary>
         <div class="form-grid details-grid">
+          <label>执行位置
+            <select id="backend-execution-kind">
+              <option value="local">本机</option>
+              <option value="worker">远端 Worker</option>
+            </select>
+          </label>
+          <label id="backend-worker-url-field" hidden>Worker URL
+            <input id="backend-worker-url" type="url" placeholder="http://127.0.0.1:8288">
+          </label>
+          <button type="button" class="secondary-button backend-worker-test" id="backend-worker-test" hidden>测试连接</button>
+          <p class="inline-message full-width" id="backend-worker-test-result" aria-live="polite"></p>
           <label class="full-width">环境变量 JSON
             <textarea id="backend-env" rows="4" spellcheck="false">{}</textarea>
           </label>

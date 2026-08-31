@@ -154,6 +154,27 @@ func TestEmbeddedWorkbenchShellExposesModulesAndResponsiveControls(t *testing.T)
 	}
 }
 
+func TestEmbeddedBackendEditorExposesFoldedWorkerControls(t *testing.T) {
+	index := getBody(t, "/")
+	for _, marker := range []string{
+		`id="backend-execution-kind"`,
+		`id="backend-worker-url"`,
+		`id="backend-worker-test"`,
+		`id="backend-worker-test-result"`,
+		`id="backend-execution-summary"`,
+		`id="backend-worker-instance"`,
+		`id="backend-worker-run"`,
+		`id="backend-worker-connection"`,
+	} {
+		if !strings.Contains(index, marker) {
+			t.Errorf("backend worker UI does not contain %s", marker)
+		}
+	}
+	if !strings.Contains(getBody(t, "/assets/app.js"), `/api/v1/backends/worker/test`) {
+		t.Error("backend UI does not call the worker connection endpoint")
+	}
+}
+
 func TestEmbeddedLLMConfigExposesProgressiveProviderEditors(t *testing.T) {
 	index := getBody(t, "/")
 	for _, id := range []string{

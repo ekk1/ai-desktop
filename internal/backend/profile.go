@@ -118,6 +118,13 @@ func (execution Execution) validate() error {
 	}
 }
 
+func (execution Execution) Validate() error {
+	if execution.Kind == "" {
+		execution.Kind = ExecutionLocal
+	}
+	return execution.validate()
+}
+
 func normalizeProfile(profile Profile) Profile {
 	if profile.Execution.Kind == "" {
 		profile.Execution.Kind = ExecutionLocal

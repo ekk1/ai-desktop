@@ -14,6 +14,7 @@ import (
 
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
+	"github.com/ekk1/ai-desktop/internal/worker"
 )
 
 func TestBackendProfileCRUDAndLifecycle(t *testing.T) {
@@ -128,6 +129,55 @@ func TestBackendLogEventsSendSnapshotAsSSE(t *testing.T) {
 	}
 	if event != "event: snapshot\n" || !strings.Contains(data, "snapshot text") {
 		t.Fatalf("SSE = %q%q", event, data)
+	}
+}
+
+func TestBackendWorkerConnectionTest(t *testing.T) {
+	remoteManager := worker.NewManager("worker-instance")
+	remoteServer := httptest.NewServer(worker.NewHandler("worker-test", remoteManager))
+	defer remoteServer.Close()
+	handler, _ := newBackendHandler(t)
+
+	response := doJSON(t, handler, http.MethodPost, "/api/v1/backends/worker/test", map[string]string{"worker_base_url": remoteServer.URL})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var health worker.HealthResponse
+	decodeBody(t, response, &health)
+	if health.Status != "ok" || health.Version != "worker-test" || health.InstanceID != "worker-instance" {
+		t.Fatalf("health = %#v", health)
+	}
+
+	invalid := doJSON(t, handler, http.MethodPost, "/api/v1/backends/worker/test", map[string]string{"worker_base_url": "relative"})
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid URL status = %d body = %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestBackendStartPreservesRemoteWorkerConflict(t *testing.T) {
+	remoteManager := worker.NewManager("worker-instance")
+	t.Cleanup(func() { _ = remoteManager.Shutdown(context.Background()) })
+	if _, err := remoteManager.Start(context.Background(), worker.StartRequest{
+		Command: "trap 'exit 0' TERM; while :; do sleep 0.1; done", StopGraceSeconds: 1,
+		LogBufferBytes: worker.MinLogBufferBytes, Readiness: worker.Readiness{Kind: worker.ReadinessNone, TimeoutSeconds: 60},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	remoteServer := httptest.NewServer(worker.NewHandler("test", remoteManager))
+	defer remoteServer.Close()
+	handler, _, repository := newBackendComponents(t)
+	profile := backend.DefaultProfile()
+	profile.Name = "remote conflict"
+	profile.Command = "server --port 8080"
+	profile.Execution = backend.Execution{Kind: backend.ExecutionWorker, WorkerBaseURL: remoteServer.URL}
+	created, err := repository.Create(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := doJSON(t, handler, http.MethodPost, "/api/v1/backends/"+created.ID+"/start", map[string]any{"variables": map[string]string{}})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
 }
 
