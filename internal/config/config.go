@@ -9,9 +9,10 @@ import (
 	"github.com/ekk1/ai-desktop/internal/provider"
 	"github.com/ekk1/ai-desktop/internal/sdcpp"
 	"github.com/ekk1/ai-desktop/internal/store"
+	"github.com/ekk1/ai-desktop/internal/videoconfig"
 )
 
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 4
 
 const (
 	defaultListenPort                   = 8188
@@ -28,6 +29,7 @@ type Config struct {
 	MaxUploadBytes         int64              `json:"max_upload_bytes"`
 	LLM                    provider.LLMConfig `json:"llm"`
 	Images                 sdcpp.ImageConfig  `json:"images"`
+	Videos                 videoconfig.Config `json:"videos"`
 }
 
 func Default() Config {
@@ -38,6 +40,7 @@ func Default() Config {
 		MaxUploadBytes:         defaultMaxUploadBytes,
 		LLM:                    provider.DefaultLLMConfig(),
 		Images:                 sdcpp.DefaultImageConfig(),
+		Videos:                 videoconfig.Default(),
 	}
 }
 
@@ -45,6 +48,7 @@ func (cfg Config) Clone() Config {
 	clone := cfg
 	clone.LLM = cfg.LLM.Clone()
 	clone.Images = cfg.Images.Clone()
+	clone.Videos = cfg.Videos.Clone()
 	return clone
 }
 
@@ -129,6 +133,9 @@ func (cfg Config) Validate() error {
 	if err := cfg.Images.Validate(); err != nil {
 		return fmt.Errorf("images: %w", err)
 	}
+	if err := cfg.Videos.Validate(); err != nil {
+		return fmt.Errorf("videos: %w", err)
+	}
 	return nil
 }
 
@@ -141,6 +148,9 @@ func migrate(cfg Config) (Config, error) {
 		case 2:
 			cfg.SchemaVersion = 3
 			cfg.Images = sdcpp.DefaultImageConfig()
+		case 3:
+			cfg.SchemaVersion = 4
+			cfg.Videos = videoconfig.Default()
 		default:
 			return Config{}, fmt.Errorf("no migration path from config schema version %d", cfg.SchemaVersion)
 		}

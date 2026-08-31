@@ -1,11 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/ekk1/ai-desktop/internal/videoconfig"
 )
 
 func TestResolveDataDirMakesExplicitPathAbsolute(t *testing.T) {
@@ -110,7 +113,7 @@ func TestLoadMigratesSchemaOneAndPreservesRuntimeFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != 3 || got.ListenPort != 9001 || got.ShutdownTimeoutSeconds != 15 || got.MaxUploadBytes != 1048576 {
+	if got.SchemaVersion != CurrentSchemaVersion || got.ListenPort != 9001 || got.ShutdownTimeoutSeconds != 15 || got.MaxUploadBytes != 1048576 {
 		t.Fatalf("migrated runtime config = %#v", got)
 	}
 	if len(got.LLM.QuickPaths) != 1 || got.LLM.QuickPaths[0].Name != "Local" {
@@ -124,7 +127,15 @@ func TestLoadMigratesSchemaOneAndPreservesRuntimeFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(reloaded, got) {
+	reloadedJSON, err := json.Marshal(reloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reloadedJSON, gotJSON) {
 		t.Fatalf("persisted config = %#v, want %#v", reloaded, got)
 	}
 }
@@ -153,7 +164,29 @@ func TestLoadMigratesSchemaTwoWithImageDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != 3 || len(got.Images.Providers) != 1 || got.Images.Providers[0].ID != "sdcpp-local" {
+	if got.SchemaVersion != CurrentSchemaVersion || len(got.Images.Providers) != 1 || got.Images.Providers[0].ID != "sdcpp-local" {
+		t.Fatalf("migrated config = %#v", got)
+	}
+}
+
+func TestLoadMigratesSchemaThreeWithVideoDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	old := Default()
+	old.SchemaVersion = 3
+	old.Videos = videoconfig.Config{}
+	contents, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != 4 || len(got.Videos.HTTPProviders) != 1 || got.Videos.HTTPProviders[0].ID != "sdcpp-video-local" {
 		t.Fatalf("migrated config = %#v", got)
 	}
 }

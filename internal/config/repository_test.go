@@ -108,3 +108,19 @@ func TestRepositoryRejectsInvalidImagesWithoutChangingState(t *testing.T) {
 		t.Fatalf("poll interval changed to %d", got)
 	}
 }
+
+func TestRepositoryUpdateVideosPersistsDeepCopy(t *testing.T) {
+	repository, err := OpenRepository(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	videos := repository.Snapshot().Videos
+	videos.HTTPProviders[0].Headers["X-Test"] = "before"
+	if _, err := repository.UpdateVideos(videos); err != nil {
+		t.Fatal(err)
+	}
+	videos.HTTPProviders[0].Headers["X-Test"] = "after"
+	if got := repository.Snapshot().Videos.HTTPProviders[0].Headers["X-Test"]; got != "before" {
+		t.Fatalf("repository retained alias with value %q", got)
+	}
+}
