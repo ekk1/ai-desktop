@@ -327,9 +327,9 @@ func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) 
 			t.Errorf("backend script does not preserve cleared log offsets: missing %s", behavior)
 		}
 	}
-	for _, behavior := range []string{"TextEncoder", "TextDecoder", "utf8ByteLength", "sliceUTF8"} {
+	for _, behavior := range []string{"Uint8Array", "atob", "TextDecoder", "data_base64", "start_offset", "end_offset"} {
 		if !strings.Contains(script, behavior) {
-			t.Errorf("backend script does not preserve UTF-8 byte offsets for multibyte logs: missing %s", behavior)
+			t.Errorf("backend script does not preserve raw-byte log offsets: missing %s", behavior)
 		}
 	}
 }

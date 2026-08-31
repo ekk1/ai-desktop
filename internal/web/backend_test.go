@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -127,8 +128,46 @@ func TestBackendLogEventsSendSnapshotAsSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event != "event: snapshot\n" || !strings.Contains(data, "snapshot text") {
+	var payload struct {
+		StartOffset int64  `json:"start_offset"`
+		EndOffset   int64  `json:"end_offset"`
+		DataBase64  string `json:"data_base64"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(data, "data: ")), &payload); err != nil {
+		t.Fatalf("decode SSE payload: %v", err)
+	}
+	contents, err := base64.StdEncoding.DecodeString(payload.DataBase64)
+	if err != nil {
+		t.Fatalf("decode SSE bytes: %v", err)
+	}
+	if event != "event: snapshot\n" || string(contents) != "snapshot text" || payload.StartOffset != 0 || payload.EndOffset != int64(len(contents)) {
 		t.Fatalf("SSE = %q%q", event, data)
+	}
+}
+
+func TestBackendLogSSEPreservesInvalidAndTruncatedUTF8Bytes(t *testing.T) {
+	raw := []byte{0xb8, 0xad, 0xff, '\n'} // Begins in the middle of a UTF-8 rune and includes an invalid byte.
+	var stream bytes.Buffer
+	writeBackendLogSSE(&stream, "snapshot", 41, raw)
+
+	lines := strings.Split(stream.String(), "\n")
+	if len(lines) < 2 || lines[0] != "event: snapshot" || !strings.HasPrefix(lines[1], "data: ") {
+		t.Fatalf("SSE = %q", stream.String())
+	}
+	var payload struct {
+		StartOffset int64  `json:"start_offset"`
+		EndOffset   int64  `json:"end_offset"`
+		DataBase64  string `json:"data_base64"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "data: ")), &payload); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload.DataBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, raw) || payload.StartOffset != 41 || payload.EndOffset != 45 {
+		t.Fatalf("payload = %#v, decoded = %x", payload, decoded)
 	}
 }
 

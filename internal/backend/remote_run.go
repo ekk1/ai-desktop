@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	remoteStartTimeout  = 10 * time.Second
-	remoteStatusTimeout = 2 * time.Second
-	remotePollInterval  = 200 * time.Millisecond
-	remoteRetryInterval = 250 * time.Millisecond
-	remoteStopTimeout   = 10 * time.Second
+	remoteStartTimeout           = 10 * time.Second
+	remoteStatusTimeout          = 2 * time.Second
+	remotePollInterval           = 200 * time.Millisecond
+	remoteRetryInterval          = 250 * time.Millisecond
+	remoteStopTimeout            = 10 * time.Second
+	remoteShutdownCleanupTimeout = remoteStatusTimeout + remoteStopTimeout + remoteStatusTimeout
 )
 
 func (manager *Manager) startRemote(ctx context.Context, profile Profile, commandText string) (RunInfo, error) {

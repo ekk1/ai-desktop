@@ -378,6 +378,62 @@ func TestManagerRetriesRemoteStopAfterSharedFailedAttempt(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownCompletesRecoveredRemoteStartAndStopPastCallerDeadline(t *testing.T) {
+	fake := newFakeWorkerClient()
+	fake.startRun = worker.Run{
+		RunID: "worker-run", InstanceID: "worker-instance", State: worker.StateRunning,
+		PID: 4321, StartedAt: time.Now().UTC(),
+	}
+	fake.status = worker.StatusResponse{Run: &fake.startRun}
+	fake.startStarted = make(chan struct{}, 1)
+	fake.startRelease = make(chan struct{})
+	fake.statusStarted = make(chan struct{}, 1)
+	fake.statusRelease = make(chan struct{})
+	fake.stopStarted = make(chan struct{}, 1)
+	fake.stopRelease = make(chan struct{})
+	manager, profile := newRemoteFakeManager(t, fake)
+	started := make(chan error, 1)
+	go func() {
+		_, err := manager.Start(context.Background(), profile.ID, nil)
+		started <- err
+	}()
+	select {
+	case <-fake.startStarted:
+	case <-time.After(time.Second):
+		t.Fatal("remote Start did not block")
+	}
+
+	shutdownContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- manager.Shutdown(shutdownContext) }()
+	select {
+	case <-fake.statusStarted:
+	case <-time.After(time.Second):
+		t.Fatal("recovery Status did not start")
+	}
+	time.Sleep(1100 * time.Millisecond)
+	close(fake.statusRelease)
+	select {
+	case <-fake.stopStarted:
+	case <-time.After(time.Second):
+		t.Fatal("recovered remote Stop did not start")
+	}
+	time.Sleep(1100 * time.Millisecond)
+	select {
+	case err := <-shutdown:
+		t.Fatalf("Shutdown returned before recovered Stop completed: %v", err)
+	default:
+	}
+	close(fake.stopRelease)
+	if err := <-started; err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := <-shutdown; err == nil {
+		t.Fatal("Shutdown() error = nil, want caller cancellation to be reported")
+	}
+}
+
 func mustRun(t *testing.T, manager *Manager, profileID string) RunInfo {
 	t.Helper()
 	run, ok := manager.Run(profileID)
@@ -403,6 +459,8 @@ type fakeWorkerClient struct {
 	startStarted       chan struct{}
 	startRelease       chan struct{}
 	startIgnoreContext bool
+	statusStarted      chan struct{}
+	statusRelease      chan struct{}
 }
 
 func newFakeWorkerClient() *fakeWorkerClient {
@@ -415,10 +473,21 @@ func (fake *fakeWorkerClient) Health(context.Context) (worker.HealthResponse, er
 	return fake.health, nil
 }
 
-func (fake *fakeWorkerClient) Status(context.Context) (worker.StatusResponse, error) {
+func (fake *fakeWorkerClient) Status(ctx context.Context) (worker.StatusResponse, error) {
 	fake.mu.Lock()
-	defer fake.mu.Unlock()
 	status := fake.status
+	started, release := fake.statusStarted, fake.statusRelease
+	fake.mu.Unlock()
+	if started != nil {
+		started <- struct{}{}
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return worker.StatusResponse{}, ctx.Err()
+		}
+	}
 	if status.Run != nil {
 		clone := *status.Run
 		status.Run = &clone

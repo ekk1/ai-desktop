@@ -101,12 +101,11 @@ let backendProfiles = [];
 let backendRuns = [];
 let selectedBackendID = "";
 let editingBackendID = "";
-let backendLogText = "";
+let backendLogBytes = new Uint8Array();
 let backendLogEvents = null;
 let backendLogProfileID = "";
 let backendLogNextOffset = 0;
 let backendLogClearOffset = 0;
-const backendLogEncoder = new TextEncoder();
 const backendLogDecoder = new TextDecoder();
 
 function setSidebar(open) {
@@ -251,10 +250,10 @@ function renderSelectedBackend() {
     for (const control of [backendUI.start, backendUI.stop, backendUI.edit, backendUI.copy, backendUI.delete, backendUI.logSave, backendUI.logClear]) {
       control.disabled = true;
     }
-    backendLogText = "";
-	backendLogProfileID = "";
-	backendLogNextOffset = 0;
-	backendLogClearOffset = 0;
+    backendLogBytes = new Uint8Array();
+    backendLogProfileID = "";
+    backendLogNextOffset = 0;
+    backendLogClearOffset = 0;
     renderBackendLog();
     closeBackendLogEvents();
     return;
@@ -303,7 +302,7 @@ function connectBackendLog(profileID, hasRun) {
   closeBackendLogEvents();
   if (backendLogProfileID !== profileID) {
     backendLogProfileID = profileID;
-    backendLogText = "";
+    backendLogBytes = new Uint8Array();
     backendLogNextOffset = 0;
     backendLogClearOffset = 0;
     renderBackendLog();
@@ -312,18 +311,16 @@ function connectBackendLog(profileID, hasRun) {
   backendLogEvents = new EventSource(`/api/v1/backends/${profileID}/logs/events`);
   backendLogEvents.addEventListener("snapshot", (event) => {
     const log = decodeBackendLogEvent(event.data);
-    const start = Math.max(log.offset, backendLogClearOffset);
-    const end = log.offset + utf8ByteLength(log.data);
-    backendLogText = start < end ? sliceUTF8(log.data, start - log.offset) : "";
-    backendLogNextOffset = end;
+    const start = Math.max(log.startOffset, backendLogClearOffset);
+    backendLogBytes = start < log.endOffset ? log.bytes.slice(start - log.startOffset) : new Uint8Array();
+    backendLogNextOffset = log.endOffset;
     renderBackendLog();
   });
   backendLogEvents.addEventListener("chunk", (event) => {
     const log = decodeBackendLogEvent(event.data);
-    const start = Math.max(log.offset, backendLogNextOffset, backendLogClearOffset);
-    const end = log.offset + utf8ByteLength(log.data);
-    if (start < end) backendLogText += sliceUTF8(log.data, start - log.offset);
-    backendLogNextOffset = Math.max(backendLogNextOffset, end);
+    const start = Math.max(log.startOffset, backendLogNextOffset, backendLogClearOffset);
+    if (start < log.endOffset) appendBackendLogBytes(log.bytes.slice(start - log.startOffset));
+    backendLogNextOffset = Math.max(backendLogNextOffset, log.endOffset);
     renderBackendLog();
   });
   backendLogEvents.onerror = () => {
@@ -331,18 +328,22 @@ function connectBackendLog(profileID, hasRun) {
   };
 }
 
-function utf8ByteLength(text) {
-  return backendLogEncoder.encode(text).length;
-}
-
-function sliceUTF8(text, offset) {
-  return backendLogDecoder.decode(backendLogEncoder.encode(text).slice(offset));
+function appendBackendLogBytes(bytes) {
+  const combined = new Uint8Array(backendLogBytes.length + bytes.length);
+  combined.set(backendLogBytes);
+  combined.set(bytes, backendLogBytes.length);
+  backendLogBytes = combined;
 }
 
 function decodeBackendLogEvent(encoded) {
   const event = JSON.parse(encoded);
-  if (typeof event === "string") return { offset: backendLogNextOffset, data: event };
-  return event;
+  const binary = atob(event.data_base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  if (event.start_offset < 0 || event.end_offset < event.start_offset || bytes.length !== event.end_offset - event.start_offset) {
+    throw new Error("invalid backend log event offsets");
+  }
+  return { startOffset: event.start_offset, endOffset: event.end_offset, bytes };
 }
 
 function closeBackendLogEvents() {
@@ -353,6 +354,7 @@ function closeBackendLogEvents() {
 }
 
 function renderBackendLog() {
+  const backendLogText = backendLogDecoder.decode(backendLogBytes);
   const query = backendUI.logSearch.value.toLocaleLowerCase();
   const visible = query
     ? backendLogText.split("\n").filter((line) => line.toLocaleLowerCase().includes(query)).join("\n")
@@ -1068,7 +1070,7 @@ backendUI.logSearch.addEventListener("input", renderBackendLog);
 backendUI.logFollow.addEventListener("change", renderBackendLog);
 backendUI.logClear.addEventListener("click", () => {
   backendLogClearOffset = backendLogNextOffset;
-  backendLogText = "";
+  backendLogBytes = new Uint8Array();
   renderBackendLog();
 });
 backendUI.logSave.addEventListener("click", async () => {

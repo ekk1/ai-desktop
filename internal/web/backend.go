@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -292,10 +293,15 @@ func (handler backendHandler) writeError(response http.ResponseWriter, err error
 	}
 }
 
-func writeBackendLogSSE(response io.Writer, event string, offset int64, contents []byte) {
+func writeBackendLogSSE(response io.Writer, event string, startOffset int64, contents []byte) {
 	encoded, _ := json.Marshal(struct {
-		Offset int64  `json:"offset"`
-		Data   string `json:"data"`
-	}{Offset: offset, Data: string(contents)})
+		StartOffset int64  `json:"start_offset"`
+		EndOffset   int64  `json:"end_offset"`
+		DataBase64  string `json:"data_base64"`
+	}{
+		StartOffset: startOffset,
+		EndOffset:   startOffset + int64(len(contents)),
+		DataBase64:  base64.StdEncoding.EncodeToString(contents),
+	})
 	_, _ = fmt.Fprintf(response, "event: %s\ndata: %s\n\n", event, encoded)
 }

@@ -281,7 +281,7 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 			errorsByProfile = append(errorsByProfile, fmt.Errorf("stop backend %s: %w", id, err))
 		}
 	}
-	cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), remoteStatusTimeout)
+	cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), remoteShutdownCleanupTimeout)
 	defer cleanupCancel()
 	for _, id := range ids {
 		if err := manager.finishRemoteStartForShutdown(cleanupContext, id); err != nil {
