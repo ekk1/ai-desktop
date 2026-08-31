@@ -120,6 +120,7 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 			ImageManager:      imageManager,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 	return &applicationRuntime{server: server, backendManager: manager, llmManager: llmManager, imageManager: imageManager}, nil

@@ -68,3 +68,13 @@ func TestRunServerRejectsInvalidPorts(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerHTTPServerBoundsRequestReadsWithoutBoundingSSEWrites(t *testing.T) {
+	server := newHTTPServer("test", NewManager("instance-test"))
+	if server.ReadTimeout <= 0 {
+		t.Fatalf("ReadTimeout = %v, want bounded JSON request reads", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %v, want unbounded SSE writes", server.WriteTimeout)
+	}
+}

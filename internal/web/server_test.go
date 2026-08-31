@@ -319,6 +319,14 @@ func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) 
 			t.Errorf("backend script does not contain %s", behavior)
 		}
 	}
+	if strings.Contains(script, "/logs/clear") {
+		t.Error("backend clear button still clears the server log mirror")
+	}
+	for _, behavior := range []string{"backendLogClearOffset", "offset"} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("backend script does not preserve cleared log offsets: missing %s", behavior)
+		}
+	}
 }
 
 func TestEmbeddedGalleryExposesAssetWorkflowAndReusablePicker(t *testing.T) {

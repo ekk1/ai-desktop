@@ -75,3 +75,14 @@ func TestProfileValidateExecutionLocation(t *testing.T) {
 		})
 	}
 }
+
+func TestProfileValidateRejectsWorkerReadinessRejectedByWorker(t *testing.T) {
+	profile := DefaultProfile()
+	profile.Name = "remote server"
+	profile.Command = "server --port 8080"
+	profile.Execution = Execution{Kind: ExecutionWorker, WorkerBaseURL: "http://127.0.0.1:8288"}
+	profile.Readiness = Readiness{Kind: ReadinessHTTP, URL: "https://127.0.0.1:8080/health", TimeoutSeconds: 60}
+	if err := profile.Validate(); err == nil || !strings.Contains(err.Error(), "readiness") {
+		t.Fatalf("Validate() error = %v, want worker readiness validation", err)
+	}
+}

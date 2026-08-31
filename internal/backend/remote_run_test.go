@@ -198,6 +198,74 @@ func TestManagerDoesNotAdoptExistingRunAfterStructuredStartRejection(t *testing.
 	}
 }
 
+func TestManagerShutdownWaitsForBlockedRemoteStartAndStopsResolvedRun(t *testing.T) {
+	fake := newFakeWorkerClient()
+	fake.startRun = worker.Run{
+		RunID: "worker-run", InstanceID: "worker-instance", State: worker.StateRunning,
+		PID: 4321, StartedAt: time.Now().UTC(),
+	}
+	fake.startStarted = make(chan struct{}, 1)
+	fake.startRelease = make(chan struct{})
+	manager, profile := newRemoteFakeManager(t, fake)
+
+	started := make(chan error, 1)
+	go func() {
+		_, err := manager.Start(context.Background(), profile.ID, nil)
+		started <- err
+	}()
+	select {
+	case <-fake.startStarted:
+	case <-time.After(time.Second):
+		t.Fatal("remote Start did not block")
+	}
+
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- manager.Shutdown(context.Background()) }()
+	select {
+	case err := <-shutdown:
+		t.Fatalf("Shutdown returned before remote Start resolved: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(fake.startRelease)
+	if err := <-started; err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := <-shutdown; err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.stopCalls != 1 || len(fake.stopRunIDs) != 1 || fake.stopRunIDs[0] != "worker-run" {
+		t.Fatalf("stop calls = %d, run IDs = %q", fake.stopCalls, fake.stopRunIDs)
+	}
+}
+
+func TestManagerReconcilesFinalRemoteLogSnapshotBeforeCompletion(t *testing.T) {
+	fake := newFakeWorkerClient()
+	fake.startRun = worker.Run{
+		RunID: "worker-run", InstanceID: "worker-instance", State: worker.StateRunning,
+		PID: 4321, StartedAt: time.Now().UTC(),
+	}
+	fake.status = worker.StatusResponse{Run: &fake.startRun}
+	manager, profile := newRemoteFakeManager(t, fake)
+	if _, err := manager.Start(context.Background(), profile.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	terminal := fake.startRun
+	terminal.State = worker.StateStopped
+	fake.setStatus(worker.StatusResponse{Run: &terminal})
+	fake.setLogs(worker.LogSnapshot{StartOffset: 0, EndOffset: int64(len("final output\n")), Data: []byte("final output\n")})
+	waitForState(t, manager, profile.ID, StateStopped)
+	logs, err := manager.LogSnapshot(profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(logs) != "final output\n" {
+		t.Fatalf("logs = %q, want terminal snapshot", logs)
+	}
+}
+
 func mustRun(t *testing.T, manager *Manager, profileID string) RunInfo {
 	t.Helper()
 	run, ok := manager.Run(profileID)
@@ -215,6 +283,10 @@ type fakeWorkerClient struct {
 	health       worker.HealthResponse
 	startRequest worker.StartRequest
 	stopCalls    int
+	stopRunIDs   []string
+	logs         worker.LogSnapshot
+	startStarted chan struct{}
+	startRelease chan struct{}
 }
 
 func newFakeWorkerClient() *fakeWorkerClient {
@@ -238,9 +310,8 @@ func (fake *fakeWorkerClient) Status(context.Context) (worker.StatusResponse, er
 	return status, nil
 }
 
-func (fake *fakeWorkerClient) Start(_ context.Context, request worker.StartRequest) (worker.Run, error) {
+func (fake *fakeWorkerClient) Start(ctx context.Context, request worker.StartRequest) (worker.Run, error) {
 	fake.mu.Lock()
-	defer fake.mu.Unlock()
 	fake.startRequest = request
 	run := fake.startRun
 	if run.Request.Command == "" {
@@ -250,6 +321,18 @@ func (fake *fakeWorkerClient) Start(_ context.Context, request worker.StartReque
 			fake.status.Run.Request = request
 		}
 	}
+	started, release := fake.startStarted, fake.startRelease
+	fake.mu.Unlock()
+	if started != nil {
+		started <- struct{}{}
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return worker.Run{}, ctx.Err()
+		}
+	}
 	return run, fake.startErr
 }
 
@@ -257,6 +340,7 @@ func (fake *fakeWorkerClient) Stop(_ context.Context, runID string) (worker.Run,
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.stopCalls++
+	fake.stopRunIDs = append(fake.stopRunIDs, runID)
 	run := fake.startRun
 	if run.RunID != runID {
 		return worker.Run{}, worker.ErrRunMismatch
@@ -271,7 +355,15 @@ func (fake *fakeWorkerClient) Stop(_ context.Context, runID string) (worker.Run,
 }
 
 func (fake *fakeWorkerClient) Logs(context.Context, string) (worker.LogSnapshot, error) {
-	return worker.LogSnapshot{}, nil
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.logs, nil
+}
+
+func (fake *fakeWorkerClient) setLogs(logs worker.LogSnapshot) {
+	fake.mu.Lock()
+	fake.logs = logs
+	fake.mu.Unlock()
 }
 
 func (fake *fakeWorkerClient) SubscribeLogs(ctx context.Context, _ string) (<-chan worker.LogEvent, <-chan error, error) {

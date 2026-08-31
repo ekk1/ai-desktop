@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,24 @@ import (
 	"testing"
 	"time"
 )
+
+type fixedResolver []net.IPAddr
+
+func (resolver fixedResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	return []net.IPAddr(resolver), nil
+}
+
+func TestLoopbackReadinessDialRejectsOffLoopbackResolution(t *testing.T) {
+	client := newLoopbackReadinessHTTPClient(fixedResolver{{IP: net.ParseIP("203.0.113.20")}})
+	request, err := http.NewRequest(http.MethodGet, "http://localhost:8080/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(request)
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("readiness request error = %v, want loopback rejection", err)
+	}
+}
 
 func shellRequest(command string) StartRequest {
 	return StartRequest{

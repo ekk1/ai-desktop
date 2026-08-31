@@ -5,11 +5,25 @@ import "sync"
 const logSubscriberQueue = 16
 
 type LogBuffer struct {
-	mu          sync.Mutex
-	capacity    int
-	data        []byte
-	nextID      uint64
-	subscribers map[uint64]chan []byte
+	mu                sync.Mutex
+	capacity          int
+	data              []byte
+	startOffset       int64
+	endOffset         int64
+	nextID            uint64
+	subscribers       map[uint64]chan []byte
+	offsetSubscribers map[uint64]chan LogChunk
+}
+
+type LogSnapshot struct {
+	StartOffset int64
+	EndOffset   int64
+	Data        []byte
+}
+
+type LogChunk struct {
+	Offset int64
+	Data   []byte
 }
 
 func NewLogBuffer(capacity int) *LogBuffer {
@@ -17,9 +31,10 @@ func NewLogBuffer(capacity int) *LogBuffer {
 		capacity = 1
 	}
 	return &LogBuffer{
-		capacity:    capacity,
-		data:        make([]byte, 0, capacity),
-		subscribers: make(map[uint64]chan []byte),
+		capacity:          capacity,
+		data:              make([]byte, 0, capacity),
+		subscribers:       make(map[uint64]chan []byte),
+		offsetSubscribers: make(map[uint64]chan LogChunk),
 	}
 }
 
@@ -27,6 +42,8 @@ func (buffer *LogBuffer) Write(chunk []byte) (int, error) {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 
+	offset := buffer.endOffset
+	buffer.endOffset += int64(len(chunk))
 	if len(chunk) >= buffer.capacity {
 		buffer.data = append(buffer.data[:0], chunk[len(chunk)-buffer.capacity:]...)
 	} else {
@@ -37,6 +54,7 @@ func (buffer *LogBuffer) Write(chunk []byte) (int, error) {
 		}
 		buffer.data = append(buffer.data, chunk...)
 	}
+	buffer.startOffset = buffer.endOffset - int64(len(buffer.data))
 
 	for _, subscriber := range buffer.subscribers {
 		copyOfChunk := append([]byte(nil), chunk...)
@@ -53,7 +71,28 @@ func (buffer *LogBuffer) Write(chunk []byte) (int, error) {
 			}
 		}
 	}
+	for _, subscriber := range buffer.offsetSubscribers {
+		copyOfChunk := LogChunk{Offset: offset, Data: append([]byte(nil), chunk...)}
+		select {
+		case subscriber <- copyOfChunk:
+		default:
+			select {
+			case <-subscriber:
+			default:
+			}
+			select {
+			case subscriber <- copyOfChunk:
+			default:
+			}
+		}
+	}
 	return len(chunk), nil
+}
+
+func (buffer *LogBuffer) SnapshotWithOffset() LogSnapshot {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.snapshotLocked()
 }
 
 func (buffer *LogBuffer) Snapshot() []byte {
@@ -66,6 +105,36 @@ func (buffer *LogBuffer) Clear() {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	buffer.data = buffer.data[:0]
+	buffer.startOffset = buffer.endOffset
+}
+
+func (buffer *LogBuffer) SubscribeWithSnapshot() (LogSnapshot, <-chan LogChunk, func()) {
+	buffer.mu.Lock()
+	id := buffer.nextID
+	buffer.nextID++
+	channel := make(chan LogChunk, logSubscriberQueue)
+	buffer.offsetSubscribers[id] = channel
+	snapshot := buffer.snapshotLocked()
+	buffer.mu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			buffer.mu.Lock()
+			delete(buffer.offsetSubscribers, id)
+			close(channel)
+			buffer.mu.Unlock()
+		})
+	}
+	return snapshot, channel, cancel
+}
+
+func (buffer *LogBuffer) snapshotLocked() LogSnapshot {
+	return LogSnapshot{
+		StartOffset: buffer.startOffset,
+		EndOffset:   buffer.endOffset,
+		Data:        append([]byte(nil), buffer.data...),
+	}
 }
 
 func (buffer *LogBuffer) Subscribe() (<-chan []byte, func()) {

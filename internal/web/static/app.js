@@ -103,6 +103,9 @@ let selectedBackendID = "";
 let editingBackendID = "";
 let backendLogText = "";
 let backendLogEvents = null;
+let backendLogProfileID = "";
+let backendLogNextOffset = 0;
+let backendLogClearOffset = 0;
 
 function setSidebar(open) {
   document.body.classList.toggle("sidebar-open", open);
@@ -247,6 +250,9 @@ function renderSelectedBackend() {
       control.disabled = true;
     }
     backendLogText = "";
+	backendLogProfileID = "";
+	backendLogNextOffset = 0;
+	backendLogClearOffset = 0;
     renderBackendLog();
     closeBackendLogEvents();
     return;
@@ -293,21 +299,38 @@ function formatUptime(run) {
 
 function connectBackendLog(profileID, hasRun) {
   closeBackendLogEvents();
-  backendLogText = "";
-  renderBackendLog();
+  if (backendLogProfileID !== profileID) {
+    backendLogProfileID = profileID;
+    backendLogText = "";
+    backendLogNextOffset = 0;
+    backendLogClearOffset = 0;
+    renderBackendLog();
+  }
   if (!hasRun) return;
   backendLogEvents = new EventSource(`/api/v1/backends/${profileID}/logs/events`);
   backendLogEvents.addEventListener("snapshot", (event) => {
-    backendLogText = JSON.parse(event.data);
+    const log = decodeBackendLogEvent(event.data);
+    const start = Math.max(log.offset, backendLogClearOffset);
+    backendLogText = start < log.offset + log.data.length ? log.data.slice(start - log.offset) : "";
+    backendLogNextOffset = log.offset + log.data.length;
     renderBackendLog();
   });
   backendLogEvents.addEventListener("chunk", (event) => {
-    backendLogText += JSON.parse(event.data);
+    const log = decodeBackendLogEvent(event.data);
+    const start = Math.max(log.offset, backendLogNextOffset, backendLogClearOffset);
+    if (start < log.offset + log.data.length) backendLogText += log.data.slice(start - log.offset);
+    backendLogNextOffset = Math.max(backendLogNextOffset, log.offset + log.data.length);
     renderBackendLog();
   });
   backendLogEvents.onerror = () => {
     if (backendLogEvents) backendLogEvents.close();
   };
+}
+
+function decodeBackendLogEvent(encoded) {
+  const event = JSON.parse(encoded);
+  if (typeof event === "string") return { offset: backendLogNextOffset, data: event };
+  return event;
 }
 
 function closeBackendLogEvents() {
@@ -1031,14 +1054,10 @@ backendUI.delete.addEventListener("click", async () => {
 });
 backendUI.logSearch.addEventListener("input", renderBackendLog);
 backendUI.logFollow.addEventListener("change", renderBackendLog);
-backendUI.logClear.addEventListener("click", async () => {
-  try {
-    await backendAction(`/api/v1/backends/${selectedBackendID}/logs/clear`);
-    backendLogText = "";
-    renderBackendLog();
-  } catch (error) {
-    backendUI.actionMessage.textContent = error.message;
-  }
+backendUI.logClear.addEventListener("click", () => {
+  backendLogClearOffset = backendLogNextOffset;
+  backendLogText = "";
+  renderBackendLog();
 });
 backendUI.logSave.addEventListener("click", async () => {
   try {

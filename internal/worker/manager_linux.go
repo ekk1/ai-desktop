@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,6 +23,10 @@ var (
 	ErrRunMismatch = errors.New("worker run ID does not match the current run")
 	ErrNoRun       = errors.New("worker has no run")
 )
+
+type ipAddressResolver interface {
+	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
 
 type managedProcess struct {
 	cmd             *exec.Cmd
@@ -43,12 +48,51 @@ type Manager struct {
 func NewManager(instanceID string) *Manager {
 	return &Manager{
 		instanceID: instanceID,
-		httpClient: &http.Client{
-			Timeout: time.Second,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+		httpClient: newLoopbackReadinessHTTPClient(net.DefaultResolver),
+	}
+}
+
+func newLoopbackReadinessHTTPClient(resolver ipAddressResolver) *http.Client {
+	return &http.Client{
+		Timeout: time.Second,
+		Transport: &http.Transport{
+			Proxy:       nil,
+			DialContext: loopbackDialContext(resolver),
 		},
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func loopbackDialContext(resolver ipAddressResolver) func(context.Context, string, string) (net.Conn, error) {
+	dialer := net.Dialer{}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		addresses, err := resolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve readiness host %q: %w", host, err)
+		}
+		if len(addresses) == 0 {
+			return nil, fmt.Errorf("readiness host %q resolved to no addresses", host)
+		}
+		for _, resolved := range addresses {
+			if !resolved.IP.IsLoopback() {
+				return nil, fmt.Errorf("readiness host %q resolved to non-loopback address %s", host, resolved.IP)
+			}
+		}
+		var lastErr error
+		for _, resolved := range addresses {
+			connection, err := dialer.DialContext(ctx, network, net.JoinHostPort(resolved.IP.String(), port))
+			if err == nil {
+				return connection, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
 	}
 }
 

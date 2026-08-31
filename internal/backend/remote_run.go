@@ -15,6 +15,7 @@ const (
 	remoteStatusTimeout = 2 * time.Second
 	remotePollInterval  = 200 * time.Millisecond
 	remoteRetryInterval = 250 * time.Millisecond
+	remoteStopTimeout   = 10 * time.Second
 )
 
 func (manager *Manager) startRemote(ctx context.Context, profile Profile, commandText string) (RunInfo, error) {
@@ -30,9 +31,10 @@ func (manager *Manager) startRemote(ctx context.Context, profile Profile, comman
 	}
 	client := manager.workerFactory(profile.Execution.WorkerBaseURL)
 	process := &managedProcess{
-		log:    NewLogBuffer(profile.LogBufferBytes),
-		done:   make(chan struct{}),
-		remote: client,
+		log:             NewLogBuffer(profile.LogBufferBytes),
+		done:            make(chan struct{}),
+		remote:          client,
+		remoteStartDone: make(chan struct{}),
 		info: RunInfo{
 			RunID:           localRunID,
 			ProfileID:       profile.ID,
@@ -92,9 +94,21 @@ func (manager *Manager) startRemote(ctx context.Context, profile Profile, comman
 	process.info.ConnectionError = ""
 	manager.applyRemoteRunLocked(process, remoteRun)
 	initial := cloneRunInfo(process.info)
+	stopPending := process.stopRequested
+	manager.closeRemoteStartLocked(process)
 	manager.mu.Unlock()
-	go manager.watchRemoteRun(remoteContext, process)
-	go manager.mirrorRemoteLogs(remoteContext, process)
+	if stopPending {
+		stopContext, stopCancel := context.WithTimeout(context.Background(), remoteStopTimeout)
+		defer stopCancel()
+		if err := manager.stopRemote(stopContext, process); err != nil {
+			return RunInfo{}, err
+		}
+		initial = manager.remoteRunInfo(process)
+	}
+	if isActive(initial.State) {
+		go manager.watchRemoteRun(remoteContext, process)
+		go manager.mirrorRemoteLogs(remoteContext, process)
+	}
 	return initial, nil
 }
 
@@ -110,6 +124,7 @@ func (manager *Manager) failRemoteStart(process *managedProcess, startErr error)
 	process.info.Error = truncateBackendError(startErr.Error())
 	process.info.ConnectionState = ConnectionUnknown
 	process.info.ConnectionError = truncateBackendError(startErr.Error())
+	manager.closeRemoteStartLocked(process)
 	manager.closeRemoteDoneLocked(process)
 }
 
@@ -165,6 +180,9 @@ func (manager *Manager) refreshRemoteStatus(ctx context.Context, process *manage
 	manager.mu.RLock()
 	active := isActive(process.info.State)
 	manager.mu.RUnlock()
+	if !active {
+		manager.finalizeRemoteTerminal(process)
+	}
 	return active
 }
 
@@ -216,13 +234,104 @@ func (manager *Manager) applyRemoteRunLocked(process *managedProcess, remoteRun 
 		process.info.State = StateStopping
 	case worker.StateStopped:
 		process.info.State = StateStopped
-		manager.closeRemoteDoneLocked(process)
 	case worker.StateFailed:
 		process.info.State = StateFailed
-		manager.closeRemoteDoneLocked(process)
 	default:
 		manager.interruptRemoteLocked(process, fmt.Sprintf("worker returned unsupported state %q", remoteRun.State))
 	}
+}
+
+func (manager *Manager) closeRemoteStartLocked(process *managedProcess) {
+	if process.remoteStartDone == nil || process.remoteStartClosed {
+		return
+	}
+	process.remoteStartClosed = true
+	close(process.remoteStartDone)
+}
+
+func (manager *Manager) closeRemoteStopLocked(process *managedProcess) {
+	if process.remoteStopDone == nil {
+		return
+	}
+	close(process.remoteStopDone)
+}
+
+func (manager *Manager) remoteRunInfo(process *managedProcess) RunInfo {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return cloneRunInfo(process.info)
+}
+
+func (manager *Manager) stopRemote(ctx context.Context, process *managedProcess) error {
+	manager.mu.Lock()
+	if !isActive(process.info.State) {
+		manager.mu.Unlock()
+		return nil
+	}
+	process.stopRequested = true
+	process.info.State = StateStopping
+	if process.info.WorkerRunID == "" {
+		startDone := process.remoteStartDone
+		manager.mu.Unlock()
+		select {
+		case <-startDone:
+			return manager.stopRemote(ctx, process)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if process.remoteStopStarted {
+		stopDone := process.remoteStopDone
+		manager.mu.Unlock()
+		select {
+		case <-stopDone:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	process.remoteStopStarted = true
+	process.remoteStopDone = make(chan struct{})
+	client := process.remote
+	workerRunID := process.info.WorkerRunID
+	profileName := process.info.ProfileName
+	manager.mu.Unlock()
+
+	remoteRun, err := client.Stop(ctx, workerRunID)
+	manager.mu.Lock()
+	manager.closeRemoteStopLocked(process)
+	manager.mu.Unlock()
+	if err != nil {
+		manager.markRemoteConnectionError(process, err)
+		return fmt.Errorf("stop remote backend profile %q: %w", profileName, err)
+	}
+	manager.applyRemoteRun(process, remoteRun)
+	manager.mu.RLock()
+	active := isActive(process.info.State)
+	manager.mu.RUnlock()
+	if !active {
+		manager.finalizeRemoteTerminal(process)
+	}
+	return nil
+}
+
+func (manager *Manager) finalizeRemoteTerminal(process *managedProcess) {
+	manager.mu.Lock()
+	if process.doneClosed || process.remoteFinalizing {
+		manager.mu.Unlock()
+		return
+	}
+	process.remoteFinalizing = true
+	manager.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), remoteStatusTimeout)
+	manager.syncRemoteLog(ctx, process)
+	cancel()
+
+	manager.mu.Lock()
+	process.remoteFinalizing = false
+	manager.closeRemoteDoneLocked(process)
+	manager.mu.Unlock()
 }
 
 func (manager *Manager) markRemoteConnectionError(process *managedProcess, connectionErr error) {

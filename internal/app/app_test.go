@@ -43,6 +43,19 @@ func TestNewServerAlwaysUsesLoopbackAddress(t *testing.T) {
 	}
 }
 
+func TestNewServerBoundsRequestReadsWithoutBoundingSSEWrites(t *testing.T) {
+	server, err := NewServer(t.TempDir(), config.Default(), "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.ReadTimeout <= 0 {
+		t.Fatalf("ReadTimeout = %v, want bounded JSON request reads", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %v, want unbounded SSE writes", server.WriteTimeout)
+	}
+}
+
 func TestNewServerRejectsInvalidPortOverride(t *testing.T) {
 	for _, port := range []int{-1, 65536} {
 		t.Run(fmt.Sprintf("port_%d", port), func(t *testing.T) {

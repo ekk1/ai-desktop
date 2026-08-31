@@ -226,7 +226,7 @@ func (handler backendHandler) logEvents(response http.ResponseWriter, request *h
 	response.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	response.Header().Set("Cache-Control", "no-cache")
 	response.Header().Set("X-Accel-Buffering", "no")
-	writeSSE(response, "snapshot", snapshot)
+	writeBackendLogSSE(response, "snapshot", snapshot.StartOffset, snapshot.Data)
 	flusher.Flush()
 	for {
 		select {
@@ -234,7 +234,7 @@ func (handler backendHandler) logEvents(response http.ResponseWriter, request *h
 			if !open {
 				return
 			}
-			writeSSE(response, "chunk", chunk)
+			writeBackendLogSSE(response, "chunk", chunk.Offset, chunk.Data)
 			flusher.Flush()
 		case <-request.Context().Done():
 			return
@@ -292,7 +292,10 @@ func (handler backendHandler) writeError(response http.ResponseWriter, err error
 	}
 }
 
-func writeSSE(response io.Writer, event string, contents []byte) {
-	encoded, _ := json.Marshal(string(contents))
+func writeBackendLogSSE(response io.Writer, event string, offset int64, contents []byte) {
+	encoded, _ := json.Marshal(struct {
+		Offset int64  `json:"offset"`
+		Data   string `json:"data"`
+	}{Offset: offset, Data: string(contents)})
 	_, _ = fmt.Fprintf(response, "event: %s\ndata: %s\n\n", event, encoded)
 }

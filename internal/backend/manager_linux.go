@@ -57,18 +57,23 @@ type RunInfo struct {
 }
 
 type managedProcess struct {
-	cmd              *exec.Cmd
-	log              *LogBuffer
-	done             chan struct{}
-	info             RunInfo
-	stopRequested    bool
-	failureReason    string
-	readinessCancel  context.CancelFunc
-	remote           WorkerClient
-	remoteCancel     context.CancelFunc
-	remoteNextOffset int64
-	remoteOffsetSet  bool
-	doneClosed       bool
+	cmd               *exec.Cmd
+	log               *LogBuffer
+	done              chan struct{}
+	info              RunInfo
+	stopRequested     bool
+	failureReason     string
+	readinessCancel   context.CancelFunc
+	remote            WorkerClient
+	remoteCancel      context.CancelFunc
+	remoteStartDone   chan struct{}
+	remoteStartClosed bool
+	remoteStopDone    chan struct{}
+	remoteStopStarted bool
+	remoteFinalizing  bool
+	remoteNextOffset  int64
+	remoteOffsetSet   bool
+	doneClosed        bool
 }
 
 type WorkerClient interface {
@@ -201,18 +206,8 @@ func (manager *Manager) Stop(ctx context.Context, profileID string) error {
 		return nil
 	}
 	if process.remote != nil {
-		process.stopRequested = true
-		process.info.State = StateStopping
-		client := process.remote
-		workerRunID := process.info.WorkerRunID
 		manager.mu.Unlock()
-		remoteRun, err := client.Stop(ctx, workerRunID)
-		if err != nil {
-			manager.markRemoteConnectionError(process, err)
-			return fmt.Errorf("stop remote backend profile %q: %w", process.info.ProfileName, err)
-		}
-		manager.applyRemoteRun(process, remoteRun)
-		return nil
+		return manager.stopRemote(ctx, process)
 	}
 	process.stopRequested = true
 	process.info.State = StateStopping
@@ -313,13 +308,13 @@ func (manager *Manager) LogSnapshot(profileID string) ([]byte, error) {
 	return process.log.Snapshot(), nil
 }
 
-func (manager *Manager) SubscribeLog(profileID string) ([]byte, <-chan []byte, func(), error) {
+func (manager *Manager) SubscribeLog(profileID string) (LogSnapshot, <-chan LogChunk, func(), error) {
 	process, err := manager.process(profileID)
 	if err != nil {
-		return nil, nil, nil, err
+		return LogSnapshot{}, nil, nil, err
 	}
-	chunks, cancel := process.log.Subscribe()
-	return process.log.Snapshot(), chunks, cancel, nil
+	snapshot, chunks, cancel := process.log.SubscribeWithSnapshot()
+	return snapshot, chunks, cancel, nil
 }
 
 func (manager *Manager) ClearLog(profileID string) error {

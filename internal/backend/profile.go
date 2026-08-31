@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/ekk1/ai-desktop/internal/worker"
 )
 
 const (
@@ -91,7 +93,19 @@ func (profile Profile) Validate() error {
 	if execution.Kind == "" {
 		execution.Kind = ExecutionLocal
 	}
-	return execution.validate()
+	if err := execution.validate(); err != nil {
+		return err
+	}
+	if execution.Kind == ExecutionWorker {
+		return worker.Readiness{
+			Kind:           profile.Readiness.Kind,
+			DelaySeconds:   profile.Readiness.DelaySeconds,
+			URL:            profile.Readiness.URL,
+			Pattern:        profile.Readiness.Pattern,
+			TimeoutSeconds: profile.Readiness.TimeoutSeconds,
+		}.Validate()
+	}
+	return nil
 }
 
 func (execution Execution) validate() error {

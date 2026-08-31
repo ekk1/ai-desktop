@@ -31,11 +31,7 @@ func RunServer(ctx context.Context, options ServerOptions) error {
 	if err != nil {
 		return fmt.Errorf("listen on worker loopback port %d: %w", options.Port, err)
 	}
-	server := &http.Server{
-		Handler:           NewHandler(options.Version, manager),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	server := newHTTPServer(options.Version, manager)
 	if options.OnListen != nil {
 		options.OnListen(listener.Addr().String())
 	}
@@ -65,5 +61,14 @@ func RunServer(ctx context.Context, options ServerOptions) error {
 			serveErr = nil
 		}
 		return errors.Join(serverErr, serveErr, managerErr)
+	}
+}
+
+func newHTTPServer(version string, manager *Manager) *http.Server {
+	return &http.Server{
+		Handler:           NewHandler(version, manager),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 }
