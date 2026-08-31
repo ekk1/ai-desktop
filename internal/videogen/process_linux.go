@@ -88,8 +88,6 @@ type cliAttempt struct {
 	cmd           *exec.Cmd
 	stopRequested bool
 	awaitingMain  bool
-	logDraining   bool
-	pgid          int
 }
 
 type commandOutcome struct {
@@ -226,8 +224,6 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 	}
 	attempt.cmd = command
 	attempt.awaitingMain = false
-	attempt.logDraining = true
-	attempt.pgid = command.Process.Pid
 	attempt.result.State = state
 	attempt.result.PID = command.Process.Pid
 	executor.mu.Unlock()
@@ -240,6 +236,7 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 	waited := make(chan commandOutcome, 1)
 	go func() {
 		observeErr := waitCLIExitWithoutReaping(command.Process.Pid)
+		<-logDone
 		executor.mu.Lock()
 		waitErr := command.Wait()
 		exitCode := -1
@@ -247,10 +244,6 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 			exitCode = command.ProcessState.ExitCode()
 		}
 		executor.publishCommandCompletionLocked(attempt, exitCode)
-		executor.mu.Unlock()
-		<-logDone
-		executor.mu.Lock()
-		attempt.logDraining = false
 		executor.mu.Unlock()
 		waited <- commandOutcome{exitCode: exitCode, err: errors.Join(observeErr, waitErr)}
 	}()
@@ -283,16 +276,13 @@ func (executor *CLIExecutor) Stop(ctx context.Context, attemptID string) error {
 	}
 	executor.mu.Lock()
 	attempt, exists := executor.attempts[attemptID]
-	if !exists || (!activeCLIState(attempt.result.State) && !attempt.awaitingMain && !attempt.logDraining) {
+	if !exists || (!activeCLIState(attempt.result.State) && !attempt.awaitingMain) {
 		executor.mu.Unlock()
 		return ErrCLIAttemptNotRunning
 	}
 	attempt.stopRequested = true
 	attempt.result.State = CLIStateStopping
 	pid := attempt.result.PID
-	if pid == 0 {
-		pid = attempt.pgid
-	}
 	grace := attempt.result.Request.StopGrace
 	done := attempt.done
 	executor.mu.Unlock()
@@ -314,7 +304,7 @@ func (executor *CLIExecutor) Status(attemptID string) (CLIRunStatus, error) {
 	return CLIRunStatus{
 		AttemptID: attempt.result.AttemptID,
 		PID:       attempt.result.PID,
-		Running:   activeCLIState(attempt.result.State) || attempt.awaitingMain || attempt.logDraining,
+		Running:   activeCLIState(attempt.result.State) || attempt.awaitingMain,
 		StartedAt: attempt.result.StartedAt,
 		State:     attempt.result.State,
 		Request:   cloneCLIRunRequest(attempt.result.Request),
@@ -370,7 +360,7 @@ func (executor *CLIExecutor) Shutdown(ctx context.Context) error {
 	executor.shutdown = true
 	active := make([]string, 0, len(executor.attempts))
 	for attemptID, attempt := range executor.attempts {
-		if activeCLIState(attempt.result.State) || attempt.awaitingMain || attempt.logDraining {
+		if activeCLIState(attempt.result.State) || attempt.awaitingMain {
 			active = append(active, attemptID)
 		}
 	}
