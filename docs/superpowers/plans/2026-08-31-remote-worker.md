@@ -55,7 +55,7 @@
 - Produces: `StartRequest.Validate() error`、`Readiness.Validate() error`、`Run`、`RunState`、`StatusResponse`、`APIError` 和协议上限常量。
 - Consumes: 仅 Go 标准库。
 
-- [ ] **Step 1: 写失败的协议校验测试**
+- [x] **Step 1: 写失败的协议校验测试**
 
 ```go
 func TestStartRequestValidate(t *testing.T) {
@@ -84,13 +84,13 @@ func TestStartRequestValidate(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行测试并确认因协议类型不存在而失败**
+- [x] **Step 2: 运行测试并确认因协议类型不存在而失败**
 
 Run: `go test ./internal/worker -run 'TestStartRequestValidate'`
 
 Expected: FAIL，错误包含 `undefined: worker.StartRequest`。
 
-- [ ] **Step 3: 实现完整协议类型和边界**
+- [x] **Step 3: 实现完整协议类型和边界**
 
 ```go
 const (
@@ -148,13 +148,13 @@ type StatusResponse struct { Run *Run `json:"run"` }
 
 `Validate` 必须拒绝空命令、非绝对非空工作目录、非法环境变量名、超过上限的字段、宽限范围外数值、日志容量范围外数值、无效正则，以及非 HTTP/非回环的 HTTP 就绪 URL。允许 `localhost`、`127.0.0.0/8` 和 `::1`；解析主机名后不得访问其他地址。
 
-- [ ] **Step 4: 运行协议测试和格式检查**
+- [x] **Step 4: 运行协议测试和格式检查**
 
 Run: `gofmt -w internal/worker/protocol.go internal/worker/protocol_test.go && go test ./internal/worker`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交协议边界**
+- [x] **Step 5: 提交协议边界**
 
 ```bash
 git add internal/worker/protocol.go internal/worker/protocol_test.go
@@ -173,7 +173,7 @@ git commit -m "feat: define remote worker protocol"
 - Consumes: Task 1 的 `StartRequest` 和 `Run`。
 - Produces: `NewManager(instanceID string) *Manager`、`Start(context.Context, StartRequest) (Run, error)`、`Stop(context.Context, string) (Run, error)`、`Status() StatusResponse`、`LogSnapshot(string) (LogSnapshot, error)`、`SubscribeLog(string) (LogSnapshot, <-chan LogChunk, func(), error)`、`Shutdown(context.Context) error`。
 
-- [ ] **Step 1: 写单 Slot、日志和进程组失败测试**
+- [x] **Step 1: 写单 Slot、日志和进程组失败测试**
 
 ```go
 func TestManagerRunsOnlyOneProcessGroup(t *testing.T) {
@@ -196,13 +196,13 @@ func TestManagerRunsOnlyOneProcessGroup(t *testing.T) {
 
 另写测试覆盖 stdout/stderr 原文合并、环形截断偏移、订阅取消、HTTP/日志正则/延迟就绪、就绪失败终止、自然失败退出码、TERM 超时后的整个进程组 KILL，以及 `Shutdown` 回收活动进程。
 
-- [ ] **Step 2: 运行测试并确认缺少 Manager**
+- [x] **Step 2: 运行测试并确认缺少 Manager**
 
 Run: `go test ./internal/worker -run 'TestManager|TestLogBuffer'`
 
 Expected: FAIL，错误包含 `undefined: worker.NewManager`。
 
-- [ ] **Step 3: 实现带绝对偏移的原始日志环形缓冲**
+- [x] **Step 3: 实现带绝对偏移的原始日志环形缓冲**
 
 ```go
 type LogSnapshot struct {
@@ -233,7 +233,7 @@ func (buffer *LogBuffer) Write(data []byte) (int, error) {
 
 慢订阅者采用容量固定的 Channel；满时关闭该订阅，客户端会根据偏移重新拉取快照，不能阻塞模型进程输出。
 
-- [ ] **Step 4: 实现 Linux Manager 和就绪状态机**
+- [x] **Step 4: 实现 Linux Manager 和就绪状态机**
 
 ```go
 command := exec.CommandContext(context.Background(), "/bin/bash", "-lc", request.Command)
@@ -246,13 +246,13 @@ command.Stderr = logBuffer
 
 Manager 必须先在锁内验证 Slot 空闲并保留启动状态，再启动命令；生成 128-bit 随机 `run_id`。`Stop` 对 `-PID` 发信号，Context 提前到期时也先 `SIGKILL` 再等待最多一秒。自然退出只在非用户停止且退出码非零或就绪失败时进入 `failed`。状态读取返回深拷贝，不暴露内部 Map/Slice。
 
-- [ ] **Step 5: 运行进程测试、Race 和 Vet**
+- [x] **Step 5: 运行进程测试、Race 和 Vet**
 
 Run: `gofmt -w internal/worker && go test -race ./internal/worker && go vet ./internal/worker`
 
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 提交进程服务**
+- [x] **Step 6: 提交进程服务**
 
 ```bash
 git add internal/worker/log_buffer.go internal/worker/log_buffer_test.go internal/worker/manager_linux.go internal/worker/manager_linux_test.go
@@ -271,7 +271,7 @@ git commit -m "feat: manage one remote worker process group"
 - Consumes: Task 2 的 Manager API。
 - Produces: `NewHandler(version string, manager *Manager) http.Handler`；`Client{BaseURL, HTTPClient, MaxResponseBytes}` 及 `Health`、`Status`、`Start`、`Stop`、`Logs`、`SubscribeLogs`。
 
-- [ ] **Step 1: 写严格路由和客户端失败测试**
+- [x] **Step 1: 写严格路由和客户端失败测试**
 
 ```go
 func TestHandlerRejectsUnknownStartFields(t *testing.T) {
@@ -289,13 +289,13 @@ func TestHandlerRejectsUnknownStartFields(t *testing.T) {
 
 Client 测试用 `httptest.Server` 覆盖 Base URL 正规化、非 2xx Error Envelope、有界响应、超时、纯文本日志、SSE snapshot/chunk/offset、畸形 SSE 和调用者取消。
 
-- [ ] **Step 2: 运行测试并确认 Handler/Client 不存在**
+- [x] **Step 2: 运行测试并确认 Handler/Client 不存在**
 
 Run: `go test ./internal/worker -run 'TestHandler|TestClient'`
 
 Expected: FAIL，错误包含 `undefined: worker.NewHandler` 或 `undefined: worker.Client`。
 
-- [ ] **Step 3: 实现固定路由和错误 Envelope**
+- [x] **Step 3: 实现固定路由和错误 Envelope**
 
 ```go
 mux.HandleFunc("GET /api/v1/health", handler.health)
@@ -314,7 +314,7 @@ mux.HandleFunc("GET /api/v1/process/{run_id}/logs/events", handler.logEvents)
 
 Slot 忙和 Run 不匹配返回 409；不存在历史返回 404；校验错误返回 400；内部错误返回不泄露堆栈的 500。
 
-- [ ] **Step 4: 实现有界客户端和 SSE 解析**
+- [x] **Step 4: 实现有界客户端和 SSE 解析**
 
 ```go
 type Client struct {
@@ -332,13 +332,13 @@ func (client Client) SubscribeLogs(ctx context.Context, runID string) (<-chan Lo
 
 客户端拒绝 Base URL 中的 UserInfo、Query 和 Fragment，不跟随重定向，响应读取使用 `io.LimitReader(limit+1)`。SSE Scanner 显式提高到协议允许的单事件上限，并在事件 Data 超限或偏移非法时终止。
 
-- [ ] **Step 5: 运行 Worker 包完整验证**
+- [x] **Step 5: 运行 Worker 包完整验证**
 
 Run: `gofmt -w internal/worker && go test -race ./internal/worker && go vet ./internal/worker`
 
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 提交 HTTP 协议实现**
+- [x] **Step 6: 提交 HTTP 协议实现**
 
 ```bash
 git add internal/worker/handler.go internal/worker/handler_test.go internal/worker/client.go internal/worker/client_test.go
@@ -357,7 +357,7 @@ git commit -m "feat: expose remote worker control api"
 - Consumes: Task 3 的 `NewHandler` 和 Task 2 的 `Manager.Shutdown`。
 - Produces: `worker.RunServer(ctx context.Context, options ServerOptions) error`；可构建的 `./cmd/ai-worker`。
 
-- [ ] **Step 1: 写监听和关闭失败测试**
+- [x] **Step 1: 写监听和关闭失败测试**
 
 ```go
 func TestRunServerBindsLoopbackAndStopsManagedProcess(t *testing.T) {
@@ -380,13 +380,13 @@ func TestRunServerBindsLoopbackAndStopsManagedProcess(t *testing.T) {
 
 另测非法端口、`--version` 输出、未知参数非零退出，以及活动 Shell 在 Context 取消后退出。
 
-- [ ] **Step 2: 运行测试并确认 Server 入口不存在**
+- [x] **Step 2: 运行测试并确认 Server 入口不存在**
 
 Run: `go test ./internal/worker ./cmd/ai-worker`
 
 Expected: FAIL，错误包含 `undefined: worker.RunServer`。
 
-- [ ] **Step 3: 实现固定回环 Server 生命周期**
+- [x] **Step 3: 实现固定回环 Server 生命周期**
 
 ```go
 listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(options.Port)))
@@ -399,7 +399,7 @@ server := &http.Server{
 
 Context 结束后并行调用 `server.Shutdown` 和 `manager.Shutdown`，使用 15 秒有界 Context，等待 `Serve` 返回并用 `errors.Join` 汇总错误。`instance_id` 在每次 Worker 启动时随机生成。
 
-- [ ] **Step 4: 实现命令参数和信号入口**
+- [x] **Step 4: 实现命令参数和信号入口**
 
 ```go
 func run(args []string, stdout, stderr io.Writer) int {
@@ -419,13 +419,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 ```
 
-- [ ] **Step 5: 构建、测试并检查只绑定回环**
+- [x] **Step 5: 构建、测试并检查只绑定回环**
 
 Run: `gofmt -w cmd/ai-worker internal/worker && go test -race ./cmd/ai-worker ./internal/worker && go build -o /tmp/ai-worker-check ./cmd/ai-worker && /tmp/ai-worker-check --version`
 
 Expected: 测试 PASS、构建成功、版本输出非空。
 
-- [ ] **Step 6: 提交 Worker 二进制**
+- [x] **Step 6: 提交 Worker 二进制**
 
 ```bash
 git add cmd/ai-worker internal/worker/server.go internal/worker/server_test.go
@@ -444,7 +444,7 @@ git commit -m "feat: add standalone remote worker command"
 - Consumes: Task 3 客户端接受的 Worker Base URL 规则。
 - Produces: `Execution{Kind, WorkerBaseURL}`、`ExecutionLocal`、`ExecutionWorker`；Profile Schema Version 2。
 
-- [ ] **Step 1: 写默认值、校验和 v1 迁移失败测试**
+- [x] **Step 1: 写默认值、校验和 v1 迁移失败测试**
 
 ```go
 func TestOpenRepositoryMigratesVersionOneExecutionToLocal(t *testing.T) {
@@ -466,13 +466,13 @@ func TestOpenRepositoryMigratesVersionOneExecutionToLocal(t *testing.T) {
 
 另测 Worker URL 必须为绝对 HTTP(S)、无 UserInfo/Query/Fragment、Host 非空；`local` 禁止携带 URL，`worker` 必须携带 URL。为了兼容手写请求，空 `execution.kind` 在 `DefaultProfile` 和迁移中成为 `local`，但 Update 后持久化显式值。
 
-- [ ] **Step 2: 运行测试并确认 Execution 字段不存在**
+- [x] **Step 2: 运行测试并确认 Execution 字段不存在**
 
 Run: `go test ./internal/backend -run 'Test.*Execution|TestOpenRepositoryMigrates'`
 
 Expected: FAIL，错误包含 `profile.Execution undefined`。
 
-- [ ] **Step 3: 实现 Execution 类型和深拷贝**
+- [x] **Step 3: 实现 Execution 类型和深拷贝**
 
 ```go
 const (
@@ -503,7 +503,7 @@ type Profile struct {
 
 `Profile.Validate` 必须先规范空 Kind 为 `local` 的副本再校验，但 Repository Create/Update 在保存前调用 `Normalize`，确保磁盘不会继续写空 Kind。
 
-- [ ] **Step 4: 实现显式 v1→v2 迁移并原子回写**
+- [x] **Step 4: 实现显式 v1→v2 迁移并原子回写**
 
 ```go
 const profileSchemaVersion = 2
@@ -526,13 +526,13 @@ func migrateProfileDocument(document *profileDocument) (bool, error) {
 
 迁移成功后调用 `store.WriteJSON(path, document, 0o600)` 原子回写，再构造 Repository。
 
-- [ ] **Step 5: 运行 Backend 测试和 Race**
+- [x] **Step 5: 运行 Backend 测试和 Race**
 
 Run: `gofmt -w internal/backend && go test -race ./internal/backend`
 
 Expected: PASS，包括所有既有本地 Profile 测试。
 
-- [ ] **Step 6: 提交 Profile 迁移**
+- [x] **Step 6: 提交 Profile 迁移**
 
 ```bash
 git add internal/backend/profile.go internal/backend/profile_test.go internal/backend/repository.go internal/backend/repository_test.go
@@ -551,7 +551,7 @@ git commit -m "feat: configure backend execution location"
 - Consumes: `worker.Client`、`Profile.Execution` 和现有 `RunInfo` Web 语义。
 - Produces: `NewManager(repository, logDir, WorkerClientFactory)`；Context-aware `Start(ctx, profileID, overrides)`；远端 Run 的 `WorkerInstanceID`/`WorkerRunID`/连接状态。
 
-- [ ] **Step 1: 写远端路由、实例换代和断线失败测试**
+- [x] **Step 1: 写远端路由、实例换代和断线失败测试**
 
 ```go
 func TestManagerStartsWorkerProfileRemotely(t *testing.T) {
@@ -573,13 +573,13 @@ func TestManagerStartsWorkerProfileRemotely(t *testing.T) {
 
 另测本机 Profile 不调用 Worker、Worker 忙、启动响应丢失后 Status 对账、Run ID 不匹配、Instance ID 改变后进入 `interrupted`/连接未知、隧道断开不标 stopped、远端终态、远端 Stop、远端日志快照/SSE、手动保存写入本机 `manual-<run-id>.log`、远端清屏只影响浏览器、Shutdown 有界停止。
 
-- [ ] **Step 2: 运行测试并确认 Manager 构造和 Start 签名不匹配**
+- [x] **Step 2: 运行测试并确认 Manager 构造和 Start 签名不匹配**
 
 Run: `go test ./internal/backend -run 'TestManager.*Worker|TestRemoteRun'`
 
 Expected: FAIL，错误包含 `too many arguments in call to backend.NewManager`。
 
-- [ ] **Step 3: 定义 WorkerClient 接口与远端元数据**
+- [x] **Step 3: 定义 WorkerClient 接口与远端元数据**
 
 ```go
 type WorkerClient interface {
@@ -613,7 +613,7 @@ type RunInfo struct {
 
 本地 Run 的 `ExecutionKind` 为 `local`；远端为 `worker`。连接状态只使用 `connected`、`unknown`，不混入进程 State。
 
-- [ ] **Step 4: 把本机启动封装为原有路径并加入远端分支**
+- [x] **Step 4: 把本机启动封装为原有路径并加入远端分支**
 
 ```go
 func (manager *Manager) Start(ctx context.Context, profileID string, overrides map[string]string) (RunInfo, error) {
@@ -628,11 +628,11 @@ func (manager *Manager) Start(ctx context.Context, profileID string, overrides m
 
 远端 StartRequest 使用已经展开的命令和 Profile 快照。启动返回后立即保存 Worker 两个 ID，并运行一个有界后台状态对账循环；网络错误只更新 `connection_state=unknown` 和有限错误，不改变最后可信进程 State。实例变化或 Status Slot 不再匹配时把本地 Run 标记 `interrupted`，且后续 Stop 不发送到新 Slot。
 
-- [ ] **Step 5: 实现远端日志代理与本机保存**
+- [x] **Step 5: 实现远端日志代理与本机保存**
 
 `LogSnapshot` 直接读取 Worker 当前快照；`SubscribeLog` 把远端 snapshot/chunk 转成现有字节流，若偏移断裂先重新读取快照。`SaveLog` 始终在工作台 `backends/crash-logs/manual-<local-run-id>.log` 写远端快照。`ClearLog` 对远端返回成功但不调用 Worker；前端负责清空当前 DOM。
 
-- [ ] **Step 6: 更新全部调用点为 Context-aware Start**
+- [x] **Step 6: 更新全部调用点为 Context-aware Start**
 
 ```go
 run, err := handler.manager.Start(request.Context(), id, input.Variables)
@@ -640,13 +640,13 @@ run, err := handler.manager.Start(request.Context(), id, input.Variables)
 
 测试、Web Handler 和其他调用者都传入真实 Context；不使用 `context.Background()` 掩盖浏览器取消。
 
-- [ ] **Step 7: 运行 Backend 与 Web 定向测试**
+- [x] **Step 7: 运行 Backend 与 Web 定向测试**
 
 Run: `gofmt -w internal/backend internal/web/backend.go && go test -race ./internal/backend ./internal/web`
 
 Expected: PASS，既有本机进程、日志和 API 行为不回归。
 
-- [ ] **Step 8: 提交远端 Manager 集成**
+- [x] **Step 8: 提交远端 Manager 集成**
 
 ```bash
 git add internal/backend internal/web/backend.go internal/web/backend_test.go
@@ -669,7 +669,7 @@ git commit -m "feat: run backend profiles through remote workers"
 - Consumes: Task 5 的 Profile JSON 与 Task 6 的统一 Manager。
 - Produces: `POST /api/v1/backends/worker/test`；可编辑执行位置、测试连接和观察远端状态的原生 UI。
 
-- [ ] **Step 1: 写连接测试 API 和页面结构失败测试**
+- [x] **Step 1: 写连接测试 API 和页面结构失败测试**
 
 ```go
 func TestBackendWorkerConnectionTest(t *testing.T) {
@@ -688,13 +688,13 @@ func TestBackendWorkerConnectionTest(t *testing.T) {
 
 静态页面测试断言 `backend-execution-kind`、`backend-worker-url`、`backend-worker-test`、`backend-execution-summary` 存在，并且复杂字段位于 `<details>`。
 
-- [ ] **Step 2: 运行 Web/App 测试并确认路由或元素缺失**
+- [x] **Step 2: 运行 Web/App 测试并确认路由或元素缺失**
 
 Run: `go test ./internal/web ./internal/app -run 'TestBackendWorker|Test.*Static|TestNewServer'`
 
 Expected: FAIL，返回 404 或缺少元素。
 
-- [ ] **Step 3: 实现有界连接测试路由并注入客户端工厂**
+- [x] **Step 3: 实现有界连接测试路由并注入客户端工厂**
 
 连接测试 Body 仅接受 `worker_base_url`，构造与 Manager 相同的客户端并用 3 秒 Context 调用 Health。成功返回：
 
@@ -704,7 +704,7 @@ Expected: FAIL，返回 404 或缺少元素。
 
 网络错误返回 `502 worker_unreachable`，协议版本/状态非法返回 `502 worker_invalid_response`，URL 校验错误返回 400。`app.newRuntime` 注入默认 `worker.Client` Factory；应用关闭继续经 `backend.Manager.Shutdown` 停止本机和可信匹配的远端 Run。
 
-- [ ] **Step 4: 在折叠区域增加执行位置字段**
+- [x] **Step 4: 在折叠区域增加执行位置字段**
 
 ```html
 <details class="advanced-fields">
@@ -727,7 +727,7 @@ Expected: FAIL，返回 404 或缺少元素。
 
 后端详情折叠区显示 `backend-execution-summary`、Worker Instance ID、Worker Run ID 和连接状态；主列表仅加短标签“本机”或“远端”，不展示 URL。
 
-- [ ] **Step 5: 实现原生 JS 的 Profile 序列化和浏览器清屏**
+- [x] **Step 5: 实现原生 JS 的 Profile 序列化和浏览器清屏**
 
 ```js
 execution: document.querySelector("#backend-execution-kind").value === "worker"
@@ -737,17 +737,17 @@ execution: document.querySelector("#backend-execution-kind").value === "worker"
 
 切换执行位置时只切换相关字段 `hidden`。测试连接按钮 POST URL 并显示成功实例或必要错误。远端日志“清屏”只执行 `backendLogText = ""; renderBackendLog();`，不请求 Worker 清空；下一条 Chunk 继续显示，新建 SSE 时 Snapshot 会恢复 Worker 当前缓冲。
 
-- [ ] **Step 6: 更新响应式样式与静态资源测试**
+- [x] **Step 6: 更新响应式样式与静态资源测试**
 
 复用 `.form-grid`、`.advanced-fields` 和现有 720px 断点。Worker URL 行在桌面占两列，窄屏单列；按钮使用文字，不增加图标或第三方资源。
 
-- [ ] **Step 7: 运行 Web、App 和全仓 Race 测试**
+- [x] **Step 7: 运行 Web、App 和全仓 Race 测试**
 
 Run: `gofmt -w internal/web internal/app && go test -race ./...`
 
 Expected: PASS。
 
-- [ ] **Step 8: 提交应用与 UI 集成**
+- [x] **Step 8: 提交应用与 UI 集成**
 
 ```bash
 git add internal/app internal/web
@@ -766,7 +766,7 @@ git commit -m "feat: configure remote workers in backend ui"
 - Consumes: Tasks 1–7 的最终 CLI、API、界面和行为。
 - Produces: 可复制的构建/运行命令、SSH 双隧道说明、限制、验收证据和已推送分支。
 
-- [ ] **Step 1: 更新用户运行说明**
+- [x] **Step 1: 更新用户运行说明**
 
 README 加入：
 
@@ -786,11 +786,11 @@ ssh \
 
 明确 Worker 无鉴权、只可通过 SSH、一次一个进程、无文件传输、无日志持久化；远端高级视频 CLI 不在本阶段。
 
-- [ ] **Step 2: 更新阶段状态与计划勾选**
+- [x] **Step 2: 更新阶段状态与计划勾选**
 
 总体设计把阶段 6 标为已交付、阶段 7 视频待实施。Worker 规格状态改为“已交付”，记录真实 API/CLI 与限制。本计划将完成步骤勾为 `[x]`，不得改变尚未实现要求来迁就代码。
 
-- [ ] **Step 3: 运行完整验证**
+- [x] **Step 3: 运行完整验证**
 
 Run:
 
@@ -806,11 +806,11 @@ git diff --check
 
 Expected: 所有命令退出 0，无测试失败、Race、Vet 或空白错误。
 
-- [ ] **Step 4: 运行真实 Worker HTTP/进程烟测**
+- [x] **Step 4: 运行真实 Worker HTTP/进程烟测**
 
 用 `/tmp/ai-worker-check --port 18288` 启动 Worker，确认监听地址是 `127.0.0.1:18288`；调用 Health；POST 一个输出唯一 Marker 的短 Shell；轮询到终态；GET 日志确认 Marker 原文；再启动长进程并 STOP，确认终态。最后确认进程退出且无遗留 Fixture 进程。
 
-- [ ] **Step 5: 审查需求映射和工作树**
+- [x] **Step 5: 审查需求映射和工作树**
 
 Run:
 
@@ -822,14 +822,14 @@ git diff --stat
 
 Expected: 第一条无输出；状态只包含本任务文档更新，Diff 与规格一致。
 
-- [ ] **Step 6: 提交阶段文档**
+- [x] **Step 6: 提交阶段文档**
 
 ```bash
 git add README.md docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md docs/superpowers/specs/2026-08-31-remote-worker-design.md docs/superpowers/plans/2026-08-31-remote-worker.md
 git commit -m "docs: complete remote worker phase"
 ```
 
-- [ ] **Step 7: 推送并核对远端提交**
+- [x] **Step 7: 推送并核对远端提交**
 
 ```bash
 git push origin HEAD
@@ -839,3 +839,10 @@ git rev-parse @{upstream}
 ```
 
 Expected: 工作树干净，两个提交哈希完全一致。
+
+## 交付结果
+
+- 实现提交：`f947fe6` 至 `5d35450`，包括协议、单 Slot 进程组、HTTP/SSE、独立 Worker 命令、Profile v2 迁移、远端运行对账、页面配置，以及审查后的生命周期与原始日志修正。
+- 全量验证：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、两个 Linux 二进制构建和 `git diff --check` 均退出 0；当前环境未安装 Node，因此 `node --check` 跳过，嵌入静态资源测试通过。
+- 真实烟测：`ai-worker` 在 `127.0.0.1:18288` 启动；Health、短任务 Marker、终态日志、长任务停止、信号关闭、端口释放和无残留 Fixture 均通过。
+- 最终代码审查：启动/关闭竞态、终态日志、回环拨号、浏览器清屏、Profile 预校验和请求读取时限均已修正；定向复审无剩余 Critical/Important 问题。

@@ -2,7 +2,7 @@
 
 **日期：** 2026-08-31
 
-**状态：** 已批准，待实施
+**状态：** 已交付
 
 ## 1. 目标与边界
 
@@ -52,7 +52,7 @@ SSH 隧道由用户建立和维护；工作台不执行 `ssh`、不保存 SSH �
 
 Worker 参数：
 
-- `--port`：必选或采用固定默认值，只用于 `127.0.0.1:<port>`。
+- `--port`：可选，默认 `8288`，只用于 `127.0.0.1:<port>`。
 - `--version`：输出版本并退出。
 
 Worker 不需要数据目录和配置文件。进程状态、命令快照和日志都只存在于内存。收到 `SIGINT` 或 `SIGTERM` 时，Worker 停止接收请求，按当前运行的宽限设置终止整个进程组，然后关闭 HTTP Server。
@@ -157,7 +157,7 @@ stdout 和 stderr 合并进入有容量上限的内存环形缓冲。Worker 不�
 
 旧 Profile 迁移为 `local`。命令、变量、工作目录、环境、就绪规则、宽限和日志容量继续由 Profile 保存；启动时先由工作台完成变量展开，再把不可变快照发送给 Worker。
 
-`backend.Manager` 通过内部 Executor 接口选择本地或 Worker 实现。Web API 和界面继续按 Profile ID 工作，不暴露两套操作模型。远端 Run 在本地记录 `worker_instance_id` 与 `worker_run_id`，防止 Worker 重启后把旧状态错配到新进程。
+`backend.Manager` 通过内部 `WorkerClient` 接口和 Profile 的执行位置选择本地或 Worker 路径。Web API 和界面继续按 Profile ID 工作，不暴露两套操作模型。远端 Run 在本地记录 `worker_instance_id` 与 `worker_run_id`，防止 Worker 重启后把旧状态错配到新进程。
 
 模型 Provider URL 不从 Profile 推导。用户分别配置：
 
@@ -178,7 +178,7 @@ Worker 不可达时，工作台显示“控制连接断开”，不把远端进�
 ## 8. 失败与恢复语义
 
 - 启动请求只有在子进程成功获得 PID 后才返回成功；命令启动失败返回终态错误。
-- 工作台在启动响应丢失时先查询 Worker 状态，不盲目重发。
+- 工作台在启动响应丢失时先查询 Worker 状态，不盲目重发。只有传输层结果不明且完整请求快照语义相等时才接管查询到的 Run；Worker 已明确返回 `slot_busy` 等 HTTP 错误时绝不接管现有 Run。
 - 隧道中断不停止进程；状态标记为连接未知。
 - Worker 有序关闭时停止受管进程组。
 - Worker 意外退出后不承诺接管遗留 PID；重新启动后 Slot 为空。
@@ -199,3 +199,9 @@ Worker 不可达时，工作台显示“控制连接断开”，不把远端进�
 ## 10. 验收标准
 
 用户可以在云端运行一个无配置、无数据目录的 `ai-worker`，通过 SSH 映射它的回环端口，在本地工作台中选择远端执行并启动一个 Server。工作台能实时显示原始日志、查询状态和停止进程；实际 LLM/图像/视频请求通过另一个端口直达模型 Server。Worker 上不会留下 Profile、Prompt、Asset、结果或自动日志文件。
+
+## 11. 交付记录
+
+实现位于 `cmd/ai-worker`、`internal/worker`、`internal/backend` 和现有后端管理页面。后端 Profile 文件已从 Schema v1 原子迁移到 v2，旧 Profile 明确设为 `execution.kind: local`。远端日志通过绝对偏移衔接快照与 SSE Chunk；发生截断或重连时重新对齐，不重复或静默遗漏已知区间。
+
+交付验证覆盖严格 JSON、请求/响应上限、单 Slot、进程组 TERM/KILL、四类就绪检测、重定向拒绝、Run ID 冲突、原始日志/SSE、Profile 迁移、远端启停、连接中断、实例换代、启动响应丢失、手动本机保存、应用关闭和固定回环监听。`localhost` 就绪探测在实际拨号前解析全部地址并拒绝任何非回环结果；工作台日志 SSE 以 Base64 和权威字节偏移传输原始数据，因此环形缓冲从半个 UTF-8 字符开始时也不会破坏清屏与重连位置。关闭流程为启动恢复、远端停止和最终日志对账保留了明确的有界清理时间。Worker 与工作台均可独立构建，未增加 Go Module 或前端依赖。

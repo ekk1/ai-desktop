@@ -2,7 +2,7 @@
 
 一个面向 Linux 本地 AI 工作流的单体 Web 工作台。后端仅使用 Go 标准库，前端仅使用原生 HTML、CSS 和 JavaScript，最终构建为一个内嵌页面资源的二进制。
 
-当前已完成基础骨架、后端管理、共享资产、知识备忘录、LLM 完整请求工作区和生图工作区：
+当前已完成基础骨架、后端管理、远端进程 Worker、共享资产、知识备忘录、LLM 完整请求工作区和生图工作区：
 
 - 固定监听 `127.0.0.1` 的 HTTP Server
 - 可覆盖的数据目录和监听端口
@@ -15,6 +15,8 @@
 - `/bin/bash -lc` 原始命令、工作目录、环境变量和模板变量
 - 同一 Profile 单实例、Linux 进程组启停和可选就绪检测
 - 不落盘的原始实时日志、手动保存和异常退出 crash log
+- 可选 `ai-worker`：云端回环监听、单进程组启停、状态和实时日志
+- 后端 Profile 可在本机或远端 Worker 执行，控制端口与模型 API 端口分离
 - Gallery 多文件导入、状态/文本筛选、媒体预览、备注和受控下载
 - active 精选库与 archive 归档库、批量状态调整和多选 ZIP 导出
 - 可供后续模块复用、只展示 active 内容的 Asset Picker
@@ -31,7 +33,7 @@
 - 有限并发、不可变 Attempt 快照、SSE 状态、取消、重试与中断恢复
 - 五类图片 Asset 输入、结果自动归档和一键精选
 
-下一阶段先交付可选的[远端进程 Worker](docs/superpowers/specs/2026-08-31-remote-worker-design.md)，再按独立的[视频工作区设计](docs/superpowers/specs/2026-08-31-video-workspace-design.md)接入视频生成。Worker 只经 SSH 隧道控制一个云端进程组，不传输 Prompt、Asset 或结果；生成请求通过另一条隧道直达模型 Server。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
+远端进程 Worker 已按[独立设计](docs/superpowers/specs/2026-08-31-remote-worker-design.md)交付。下一阶段按[视频工作区设计](docs/superpowers/specs/2026-08-31-video-workspace-design.md)接入视频生成。Worker 只经 SSH 隧道控制一个云端进程组，不传输 Prompt、Asset 或结果；生成请求通过另一条隧道直达模型 Server。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
 
 ## 要求
 
@@ -44,6 +46,7 @@
 
 ```bash
 go build -o ai-workbench ./cmd/ai-workbench
+go build -o ai-worker ./cmd/ai-worker
 ```
 
 可通过链接参数写入版本号：
@@ -79,12 +82,42 @@ ssh -L 8188:127.0.0.1:8188 user@linux-host
 
 保持 SSH 会话连接，然后访问 `http://127.0.0.1:8188/`。
 
+### 远端 GPU 主机双隧道
+
+在远端 GPU 主机构建并启动 Worker：
+
+```bash
+go build -o ai-worker ./cmd/ai-worker
+./ai-worker --port 8288
+```
+
+`ai-worker` 固定监听 `127.0.0.1`，默认端口为 `8288`，没有数据目录和配置文件。它的内存中只保留当前/最近 Run 和有界原始日志，任一时刻最多管理一个 `/bin/bash -lc` 进程组。
+
+在运行 `ai-workbench` 的主机建立两条独立转发：
+
+```bash
+ssh \
+  -L 8288:127.0.0.1:8288 \
+  -L 8080:127.0.0.1:8080 \
+  user@gpu-host
+```
+
+- 控制面：后端 Profile 的执行位置选择“远端 Worker”，Worker URL 填 `http://127.0.0.1:8288`。
+- 模型数据面：LLM/生图/视频 Provider 独立填写 `http://127.0.0.1:8080` 或对应本地映射端口。
+
+工作台只向控制面发送展开后的命令、工作目录、环境和进程参数；Prompt、API Key、Asset 和结果不会进入 Worker。Worker 不提供文件上传/下载、生成代理、鉴权或 TLS，也不会自动保存日志。不要把 Worker 或工作台端口直接暴露到公网。
+
+远端 Profile 的非空工作目录必须是 GPU 主机上的绝对路径；HTTP 就绪 URL 也由 Worker 在 GPU 主机上访问，因此通常填写远端 Server 的 `http://127.0.0.1:<port>/health`，不是工作台侧的映射端口。
+
+如果隧道断开，工作台将控制连接标记为“连接未知”，不会把远端 Server 谎报为已停止。Worker 实例或 Run ID 发生变化后，旧记录标记为“已中断”，工作台不会停止后来占用 Slot 的进程。Worker 被 `SIGKILL` 或云主机掉电时无法保证清理所有孙进程，这是 Linux 进程父子关系的客观限制。
+
 ## 验证
 
 ```bash
 go vet ./...
 go test ./... -count=1
 go build ./cmd/ai-workbench
+go build ./cmd/ai-worker
 ```
 
 健康检查：
@@ -107,7 +140,7 @@ curl http://127.0.0.1:8188/api/v1/health
 <data-dir>/backends/profiles.json
 ```
 
-每个 Profile 最多运行一个实例；不同 Profile 可以并行运行。工作台不检测端口、GPU 或显存冲突。
+每个 Profile 最多运行一个实例；本机的不同 Profile 可以并行运行。每个远端 Worker 全局只有一个 Slot，因此指向同一 Worker 的 Profile 不能同时运行。工作台不检测端口、GPU 或显存冲突。
 
 命令由 `/bin/bash -lc` 执行，因此配置内容等同于当前 Linux 用户的本地命令执行权限，只应录入自己信任的命令。工作台停止进程时会操作整个独立进程组，而不是只停止顶层 Shell。
 
@@ -118,7 +151,7 @@ curl http://127.0.0.1:8188/api/v1/health
 
 如果命令需要保留 Shell 自己的 `${HOME}` 展开，写成 `$${HOME}`；工作台展开后交给 Bash 的内容就是 `${HOME}`。
 
-就绪检测支持立即就绪、固定等待、HTTP 2xx 和日志正则。日志只保留在配置容量限制的内存缓冲区中：正常停止后不会自动写文件；点击“保存”时写入 `manual-*.log`，异常退出时自动写入 `crash-*.log`。
+就绪检测支持立即就绪、固定等待、HTTP 2xx 和日志正则。日志只保留在配置容量限制的内存缓冲区中：正常停止后不会自动写文件；点击“保存”时写入工作台主机的 `manual-*.log`。本机进程异常退出时自动写入 `crash-*.log`；远端 Worker 不创建 crash log，崩溃前未手动保存的远端日志可能丢失。
 
 ## LLM 完整请求工作区
 
