@@ -66,14 +66,19 @@ type managedProcess struct {
 	readinessCancel   context.CancelFunc
 	remote            WorkerClient
 	remoteCancel      context.CancelFunc
+	remoteStartCancel context.CancelFunc
 	remoteStartDone   chan struct{}
 	remoteStartClosed bool
-	remoteStopDone    chan struct{}
-	remoteStopStarted bool
+	remoteStop        *remoteStopAttempt
 	remoteFinalizing  bool
 	remoteNextOffset  int64
 	remoteOffsetSet   bool
 	doneClosed        bool
+}
+
+type remoteStopAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 type WorkerClient interface {
@@ -276,7 +281,35 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 			errorsByProfile = append(errorsByProfile, fmt.Errorf("stop backend %s: %w", id, err))
 		}
 	}
+	cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), remoteStatusTimeout)
+	defer cleanupCancel()
+	for _, id := range ids {
+		if err := manager.finishRemoteStartForShutdown(cleanupContext, id); err != nil {
+			errorsByProfile = append(errorsByProfile, fmt.Errorf("finish remote start for backend %s: %w", id, err))
+		}
+	}
 	return errors.Join(errorsByProfile...)
+}
+
+func (manager *Manager) finishRemoteStartForShutdown(ctx context.Context, profileID string) error {
+	manager.mu.Lock()
+	process, exists := manager.runs[profileID]
+	if !exists || process.remote == nil || process.remoteStartClosed {
+		manager.mu.Unlock()
+		return nil
+	}
+	startDone := process.remoteStartDone
+	startCancel := process.remoteStartCancel
+	manager.mu.Unlock()
+	if startCancel != nil {
+		startCancel()
+	}
+	select {
+	case <-startDone:
+		return manager.stopRemote(ctx, process)
+	case <-ctx.Done():
+		return fmt.Errorf("remote start cleanup timed out: %w", ctx.Err())
+	}
 }
 
 func (manager *Manager) Runs() []RunInfo {

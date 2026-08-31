@@ -327,6 +327,11 @@ func TestEmbeddedBackendWorkspaceExposesEditorActionsAndStreaming(t *testing.T) 
 			t.Errorf("backend script does not preserve cleared log offsets: missing %s", behavior)
 		}
 	}
+	for _, behavior := range []string{"TextEncoder", "TextDecoder", "utf8ByteLength", "sliceUTF8"} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("backend script does not preserve UTF-8 byte offsets for multibyte logs: missing %s", behavior)
+		}
+	}
 }
 
 func TestEmbeddedGalleryExposesAssetWorkflowAndReusablePicker(t *testing.T) {

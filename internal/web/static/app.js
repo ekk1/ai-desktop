@@ -106,6 +106,8 @@ let backendLogEvents = null;
 let backendLogProfileID = "";
 let backendLogNextOffset = 0;
 let backendLogClearOffset = 0;
+const backendLogEncoder = new TextEncoder();
+const backendLogDecoder = new TextDecoder();
 
 function setSidebar(open) {
   document.body.classList.toggle("sidebar-open", open);
@@ -311,20 +313,30 @@ function connectBackendLog(profileID, hasRun) {
   backendLogEvents.addEventListener("snapshot", (event) => {
     const log = decodeBackendLogEvent(event.data);
     const start = Math.max(log.offset, backendLogClearOffset);
-    backendLogText = start < log.offset + log.data.length ? log.data.slice(start - log.offset) : "";
-    backendLogNextOffset = log.offset + log.data.length;
+    const end = log.offset + utf8ByteLength(log.data);
+    backendLogText = start < end ? sliceUTF8(log.data, start - log.offset) : "";
+    backendLogNextOffset = end;
     renderBackendLog();
   });
   backendLogEvents.addEventListener("chunk", (event) => {
     const log = decodeBackendLogEvent(event.data);
     const start = Math.max(log.offset, backendLogNextOffset, backendLogClearOffset);
-    if (start < log.offset + log.data.length) backendLogText += log.data.slice(start - log.offset);
-    backendLogNextOffset = Math.max(backendLogNextOffset, log.offset + log.data.length);
+    const end = log.offset + utf8ByteLength(log.data);
+    if (start < end) backendLogText += sliceUTF8(log.data, start - log.offset);
+    backendLogNextOffset = Math.max(backendLogNextOffset, end);
     renderBackendLog();
   });
   backendLogEvents.onerror = () => {
     if (backendLogEvents) backendLogEvents.close();
   };
+}
+
+function utf8ByteLength(text) {
+  return backendLogEncoder.encode(text).length;
+}
+
+function sliceUTF8(text, offset) {
+  return backendLogDecoder.decode(backendLogEncoder.encode(text).slice(offset));
 }
 
 function decodeBackendLogEvent(encoded) {

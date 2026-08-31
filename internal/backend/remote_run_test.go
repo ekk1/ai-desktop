@@ -206,6 +206,7 @@ func TestManagerShutdownWaitsForBlockedRemoteStartAndStopsResolvedRun(t *testing
 	}
 	fake.startStarted = make(chan struct{}, 1)
 	fake.startRelease = make(chan struct{})
+	fake.startIgnoreContext = true
 	manager, profile := newRemoteFakeManager(t, fake)
 
 	started := make(chan error, 1)
@@ -266,6 +267,117 @@ func TestManagerReconcilesFinalRemoteLogSnapshotBeforeCompletion(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownWaitsBrieflyPastCallerDeadlineForBlockedRemoteStartCleanup(t *testing.T) {
+	fake := newFakeWorkerClient()
+	fake.startRun = worker.Run{
+		RunID: "worker-run", InstanceID: "worker-instance", State: worker.StateRunning,
+		PID: 4321, StartedAt: time.Now().UTC(),
+	}
+	fake.startStarted = make(chan struct{}, 1)
+	fake.startRelease = make(chan struct{})
+	fake.startIgnoreContext = true
+	manager, profile := newRemoteFakeManager(t, fake)
+	started := make(chan error, 1)
+	go func() {
+		_, err := manager.Start(context.Background(), profile.ID, nil)
+		started <- err
+	}()
+	select {
+	case <-fake.startStarted:
+	case <-time.After(time.Second):
+		t.Fatal("remote Start did not block")
+	}
+
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- manager.Shutdown(shutdownContext) }()
+	time.Sleep(30 * time.Millisecond)
+	select {
+	case err := <-shutdown:
+		t.Fatalf("Shutdown returned after its caller deadline before start cleanup: %v", err)
+	default:
+	}
+	close(fake.startRelease)
+	if err := <-started; err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := <-shutdown; err == nil {
+		t.Fatal("Shutdown() error = nil, want caller deadline to be reported")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.stopCalls != 1 || len(fake.stopRunIDs) != 1 || fake.stopRunIDs[0] != "worker-run" {
+		t.Fatalf("stop calls = %d, run IDs = %q", fake.stopCalls, fake.stopRunIDs)
+	}
+}
+
+func TestManagerReconcilesTerminalRemoteStartLogBeforeReturning(t *testing.T) {
+	fake := newFakeWorkerClient()
+	endedAt := time.Now().UTC()
+	exitCode := 0
+	fake.startRun = worker.Run{
+		RunID: "worker-run", InstanceID: "worker-instance", State: worker.StateStopped,
+		PID: 4321, StartedAt: time.Now().UTC(), EndedAt: &endedAt, ExitCode: &exitCode,
+	}
+	fake.setLogs(worker.LogSnapshot{StartOffset: 0, EndOffset: int64(len("terminal start\n")), Data: []byte("terminal start\n")})
+	manager, profile := newRemoteFakeManager(t, fake)
+	run, err := manager.Start(context.Background(), profile.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != StateStopped {
+		t.Fatalf("run state = %q, want stopped", run.State)
+	}
+	logs, err := manager.LogSnapshot(profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(logs) != "terminal start\n" {
+		t.Fatalf("logs = %q, want terminal start snapshot", logs)
+	}
+}
+
+func TestManagerRetriesRemoteStopAfterSharedFailedAttempt(t *testing.T) {
+	fake := newFakeWorkerClient()
+	fake.startRun = worker.Run{
+		RunID: "worker-run", InstanceID: "worker-instance", State: worker.StateRunning,
+		PID: 4321, StartedAt: time.Now().UTC(),
+	}
+	fake.stopErrors = []error{io.ErrUnexpectedEOF}
+	fake.status = worker.StatusResponse{Run: &fake.startRun}
+	fake.stopStarted = make(chan struct{}, 1)
+	fake.stopRelease = make(chan struct{})
+	manager, profile := newRemoteFakeManager(t, fake)
+	if _, err := manager.Start(context.Background(), profile.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	stops := make(chan error, 2)
+	go func() { stops <- manager.Stop(context.Background(), profile.ID) }()
+	select {
+	case <-fake.stopStarted:
+	case <-time.After(time.Second):
+		t.Fatal("remote Stop did not block")
+	}
+	go func() { stops <- manager.Stop(context.Background(), profile.ID) }()
+	time.Sleep(20 * time.Millisecond)
+	close(fake.stopRelease)
+	for range 2 {
+		if err := <-stops; !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("shared Stop() error = %v, want transport error", err)
+		}
+	}
+	if err := manager.Stop(context.Background(), profile.ID); err != nil {
+		t.Fatalf("retry Stop() error = %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.stopCalls != 2 {
+		t.Fatalf("stop calls = %d, want one shared failed call and one retry", fake.stopCalls)
+	}
+}
+
 func mustRun(t *testing.T, manager *Manager, profileID string) RunInfo {
 	t.Helper()
 	run, ok := manager.Run(profileID)
@@ -276,17 +388,21 @@ func mustRun(t *testing.T, manager *Manager, profileID string) RunInfo {
 }
 
 type fakeWorkerClient struct {
-	mu           sync.Mutex
-	startRun     worker.Run
-	startErr     error
-	status       worker.StatusResponse
-	health       worker.HealthResponse
-	startRequest worker.StartRequest
-	stopCalls    int
-	stopRunIDs   []string
-	logs         worker.LogSnapshot
-	startStarted chan struct{}
-	startRelease chan struct{}
+	mu                 sync.Mutex
+	startRun           worker.Run
+	startErr           error
+	status             worker.StatusResponse
+	health             worker.HealthResponse
+	startRequest       worker.StartRequest
+	stopCalls          int
+	stopRunIDs         []string
+	stopErrors         []error
+	stopStarted        chan struct{}
+	stopRelease        chan struct{}
+	logs               worker.LogSnapshot
+	startStarted       chan struct{}
+	startRelease       chan struct{}
+	startIgnoreContext bool
 }
 
 func newFakeWorkerClient() *fakeWorkerClient {
@@ -327,10 +443,14 @@ func (fake *fakeWorkerClient) Start(ctx context.Context, request worker.StartReq
 		started <- struct{}{}
 	}
 	if release != nil {
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return worker.Run{}, ctx.Err()
+		if fake.startIgnoreContext {
+			<-release
+		} else {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return worker.Run{}, ctx.Err()
+			}
 		}
 	}
 	return run, fake.startErr
@@ -338,9 +458,26 @@ func (fake *fakeWorkerClient) Start(ctx context.Context, request worker.StartReq
 
 func (fake *fakeWorkerClient) Stop(_ context.Context, runID string) (worker.Run, error) {
 	fake.mu.Lock()
-	defer fake.mu.Unlock()
 	fake.stopCalls++
 	fake.stopRunIDs = append(fake.stopRunIDs, runID)
+	stopIndex := fake.stopCalls - 1
+	var stopErr error
+	if stopIndex < len(fake.stopErrors) {
+		stopErr = fake.stopErrors[stopIndex]
+	}
+	started, release := fake.stopStarted, fake.stopRelease
+	fake.mu.Unlock()
+	if started != nil {
+		started <- struct{}{}
+	}
+	if release != nil {
+		<-release
+	}
+	if stopErr != nil {
+		return worker.Run{}, stopErr
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	run := fake.startRun
 	if run.RunID != runID {
 		return worker.Run{}, worker.ErrRunMismatch
