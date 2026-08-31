@@ -113,6 +113,33 @@ func TestCLIExecutorStopKillsTermIgnoringChildAfterShellExitsZero(t *testing.T) 
 	}
 }
 
+func TestCLIExecutorStopsChildAfterLeaderExitsWithLogPipeOpen(t *testing.T) {
+	executor := NewCLIExecutor()
+	request := fixtureCLIRunRequest(t, "", `(trap '' TERM; while :; do sleep 1; done) & printf leader-exited; exit 0`)
+	completed := runCLIAsync(executor, request)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		snapshot, err := executor.SnapshotLog(request.AttemptID)
+		if err == nil && strings.Contains(string(snapshot.Data), "leader-exited") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- executor.Stop(context.Background(), request.AttemptID) }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stop blocked after leader exit while child held command log pipes")
+	}
+	if result := <-completed; result.result.State != CLIStateStopped {
+		t.Fatalf("result = %#v, error = %v", result.result, result.err)
+	}
+}
+
 func TestCLIExecutorStopBeforeProcessStartPreventsProcessGroupLaunch(t *testing.T) {
 	executor := NewCLIExecutor()
 	request := fixtureCLIRunRequest(t, "", `printf ran > "$OUTPUT_DIR/ran"; trap '' TERM; while :; do :; done`)

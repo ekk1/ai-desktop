@@ -221,12 +221,12 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 	waited := make(chan commandOutcome, 1)
 	go func() {
 		observeErr := waitCLIExitWithoutReaping(command.Process.Pid)
-		executor.mu.Lock()
 		waitErr := command.Wait()
 		exitCode := -1
 		if command.ProcessState != nil {
 			exitCode = command.ProcessState.ExitCode()
 		}
+		executor.mu.Lock()
 		executor.publishCommandCompletionLocked(attempt, exitCode)
 		executor.mu.Unlock()
 		waited <- commandOutcome{exitCode: exitCode, err: errors.Join(observeErr, waitErr)}
