@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 var (
@@ -89,10 +90,16 @@ type cliAttempt struct {
 	awaitingMain  bool
 }
 
+type commandOutcome struct {
+	exitCode int
+	err      error
+}
+
 type CLIExecutor struct {
-	mu       sync.RWMutex
-	attempts map[string]*cliAttempt
-	shutdown bool
+	mu         sync.RWMutex
+	attempts   map[string]*cliAttempt
+	shutdown   bool
+	beforeMain func()
 }
 
 func NewCLIExecutor() *CLIExecutor {
@@ -168,6 +175,9 @@ func (executor *CLIExecutor) Run(ctx context.Context, request CLIRunRequest) (CL
 	if executor.wasStopped(attempt) {
 		return executor.finish(attempt, CLIStateStopped, nil, "", 0)
 	}
+	if executor.beforeMain != nil {
+		executor.beforeMain()
+	}
 	_, err := executor.runCommand(runContext, attempt, request, request.Command, CLIStateRunning)
 	if executor.wasStopped(attempt) {
 		return executor.finish(attempt, CLIStateStopped, nil, "", 0)
@@ -208,13 +218,22 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 	attempt.result.PID = command.Process.Pid
 	executor.mu.Unlock()
 
-	waited := make(chan error, 1)
-	go func() { waited <- command.Wait() }()
+	waited := make(chan commandOutcome, 1)
+	go func() {
+		observeErr := waitCLIExitWithoutReaping(command.Process.Pid)
+		executor.mu.Lock()
+		waitErr := command.Wait()
+		exitCode := -1
+		if command.ProcessState != nil {
+			exitCode = command.ProcessState.ExitCode()
+		}
+		executor.publishCommandCompletionLocked(attempt, exitCode)
+		executor.mu.Unlock()
+		waited <- commandOutcome{exitCode: exitCode, err: errors.Join(observeErr, waitErr)}
+	}()
 	select {
-	case err := <-waited:
-		exitCode := command.ProcessState.ExitCode()
-		executor.publishCommandCompletion(attempt, exitCode)
-		return exitCode, commandExitError(state, err)
+	case outcome := <-waited:
+		return outcome.exitCode, commandExitError(state, outcome.err)
 	case <-ctx.Done():
 		executor.mu.Lock()
 		if attempt.result.State != CLIStateStopping {
@@ -224,9 +243,7 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 		if terminateErr := terminateCLIGroup(command.Process.Pid, request.StopGrace, waited); terminateErr != nil {
 			return -1, errors.Join(ctx.Err(), terminateErr)
 		}
-		exitCode := command.ProcessState.ExitCode()
-		executor.publishCommandCompletion(attempt, exitCode)
-		return exitCode, ctx.Err()
+		return command.ProcessState.ExitCode(), ctx.Err()
 	}
 }
 
@@ -271,7 +288,7 @@ func (executor *CLIExecutor) Status(attemptID string) (CLIRunStatus, error) {
 	return CLIRunStatus{
 		AttemptID: attempt.result.AttemptID,
 		PID:       attempt.result.PID,
-		Running:   activeCLIState(attempt.result.State),
+		Running:   activeCLIState(attempt.result.State) || attempt.awaitingMain,
 		StartedAt: attempt.result.StartedAt,
 		State:     attempt.result.State,
 		Request:   cloneCLIRunRequest(attempt.result.Request),
@@ -327,7 +344,7 @@ func (executor *CLIExecutor) Shutdown(ctx context.Context) error {
 	executor.shutdown = true
 	active := make([]string, 0, len(executor.attempts))
 	for attemptID, attempt := range executor.attempts {
-		if activeCLIState(attempt.result.State) {
+		if activeCLIState(attempt.result.State) || attempt.awaitingMain {
 			active = append(active, attemptID)
 		}
 	}
@@ -370,8 +387,7 @@ func (executor *CLIExecutor) finish(attempt *cliAttempt, state CLIRunState, runE
 	return result, runErr
 }
 
-func (executor *CLIExecutor) publishCommandCompletion(attempt *cliAttempt, exitCode int) {
-	executor.mu.Lock()
+func (executor *CLIExecutor) publishCommandCompletionLocked(attempt *cliAttempt, exitCode int) {
 	attempt.cmd = nil
 	attempt.result.PID = 0
 	attempt.result.ExitCode = exitCode
@@ -379,7 +395,6 @@ func (executor *CLIExecutor) publishCommandCompletion(attempt *cliAttempt, exitC
 	if !attempt.stopRequested {
 		attempt.result.State = CLIStateValidating
 	}
-	executor.mu.Unlock()
 }
 
 func (executor *CLIExecutor) wasStopped(attempt *cliAttempt) bool {
@@ -404,7 +419,7 @@ func activeCLIState(state CLIRunState) bool {
 
 const maxCLIOutputBytes = int64(^uint64(0) >> 1)
 
-func terminateCLIGroup(pid int, grace time.Duration, waited <-chan error) error {
+func terminateCLIGroup(pid int, grace time.Duration, waited <-chan commandOutcome) error {
 	termErr := signalCLIProcessGroup(pid, syscall.SIGTERM)
 	if errors.Is(termErr, syscall.ESRCH) {
 		termErr = nil
@@ -415,6 +430,18 @@ func terminateCLIGroup(pid int, grace time.Duration, waited <-chan error) error 
 	}
 	<-waited
 	return errors.Join(termErr, killErr)
+}
+
+func waitCLIExitWithoutReaping(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	var info [128]byte
+	_, _, errno := syscall.Syscall6(syscall.SYS_WAITID, 1, uintptr(pid), uintptr(unsafe.Pointer(&info[0])), syscall.WEXITED|syscall.WNOWAIT, 0, 0)
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func stopCLIProcessGroup(ctx context.Context, pid int, grace time.Duration) error {

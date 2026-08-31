@@ -263,6 +263,34 @@ func TestCLIExecutorShutdownStopsAllAttemptsAndRejectsNewRuns(t *testing.T) {
 	}
 }
 
+func TestCLIExecutorShutdownStopsPrepareToMainHandoff(t *testing.T) {
+	executor := NewCLIExecutor()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	executor.beforeMain = func() { close(entered); <-release }
+	request := fixtureCLIRunRequest(t, `printf prepared > "$OUTPUT_DIR/prepared"`, `printf main > "$OUTPUT_DIR/main"`)
+	completed := runCLIAsync(executor, request)
+	<-entered
+	status, err := executor.Status(request.AttemptID)
+	if err != nil || !status.Running || status.PID != 0 {
+		t.Fatalf("handoff status = %#v, error = %v", status, err)
+	}
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- executor.Shutdown(context.Background()) }()
+	waitForCLIState(t, executor, request.AttemptID, CLIStateStopping)
+	close(release)
+	if err := <-shutdown; err != nil {
+		t.Fatal(err)
+	}
+	result := <-completed
+	if result.err != nil || result.result.State != CLIStateStopped {
+		t.Fatalf("result = %#v, error = %v", result.result, result.err)
+	}
+	if _, err := os.Stat(filepath.Join(request.OutputDir, "main")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("main launched after Shutdown: %v", err)
+	}
+}
+
 func TestCLIExecutorRetainsOffsetLogsAndSavesOnlyOnRequest(t *testing.T) {
 	executor := NewCLIExecutor()
 	request := fixtureCLIRunRequest(t, "", `printf 'log-data'; printf '\x1a\x45\xdf\xa3' > "$OUTPUT_PATH"`)
