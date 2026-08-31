@@ -27,6 +27,14 @@ func TestExpandCLITemplateRejectsMalformedNestedAndUnknownTokens(t *testing.T) {
 	}
 }
 
+// This fails if an unrecognized raw token can turn caller-provided text into
+// unquoted shell syntax, instead of being rejected by the fixed raw whitelist.
+func TestExpandCLITemplateRejectsUnknownRawTokens(t *testing.T) {
+	if _, err := ExpandCLITemplate("{{ARBITRARY_RAW}}", TemplateVariables{Raw: map[string]string{"ARBITRARY_RAW": "--unsafe"}}); err == nil {
+		t.Fatal("ExpandCLITemplate accepted an unknown raw token")
+	}
+}
+
 // This fails if omission or contradictory raw/non-raw sources can make a
 // template variable resolve unexpectedly.
 func TestExpandCLITemplateRejectsMissingAndConflictingTokens(t *testing.T) {

@@ -13,6 +13,10 @@ var ordinaryCLITemplateVariables = map[string]struct{}{
 	"INIT_IMAGE": {}, "END_IMAGE": {}, "CONTROL_FRAMES_JSON": {}, "SELECTED_ASSETS_JSON": {}, "MANIFEST_PATH": {},
 }
 
+var rawCLITemplateVariables = map[string]struct{}{
+	"EXTRA_ARGS_RAW": {},
+}
+
 // TemplateVariables separates ordinary single-argument values from an
 // explicit, trusted raw fragment. Raw names must end in _RAW.
 type TemplateVariables struct {
@@ -70,7 +74,7 @@ func ExpandCLITemplate(template string, variables TemplateVariables) (string, er
 
 func templateValue(name string, variables TemplateVariables) (string, bool, error) {
 	_, ordinary := ordinaryCLITemplateVariables[name]
-	rawName := strings.HasSuffix(name, "_RAW")
+	_, rawName := rawCLITemplateVariables[name]
 	if !ordinary && !rawName {
 		return "", false, fmt.Errorf("CLI template token %q is not allowed", name)
 	}
