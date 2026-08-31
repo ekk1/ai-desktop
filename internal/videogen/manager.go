@@ -133,38 +133,48 @@ type preparedVideoStart struct {
 	snapshot Snapshot
 }
 
+type pendingTerminalUpdate struct {
+	run     *videoAttemptRun
+	input   UpdateAttemptInput
+	lastErr error
+}
+
 // Manager supplies one persistent scheduler for both remote HTTP jobs and
 // local CLI jobs. Calls which create Attempts do all validation before placing
 // an external request or process on the queue.
 type Manager struct {
-	startMu     sync.Mutex
-	mu          sync.RWMutex
-	config      *config.Repository
-	service     *Service
-	assembler   *HTTPAssembler
-	remote      VideoRemoteClient
-	workspace   *WorkspaceManager
-	cli         *CLIExecutor
-	assets      *asset.Repository
-	accepting   bool
-	attempts    map[string]*videoAttemptRun
-	presetSem   map[string]*videoLimiter
-	batchSem    map[string]*videoLimiter
-	batchQueues map[string]*videoBatchQueue
-	subscribers map[string]map[uint64]chan AttemptEvent
-	nextSubID   uint64
-	done        chan struct{}
-	doneOnce    sync.Once
-	starts      sync.WaitGroup
-	wg          sync.WaitGroup
+	startMu          sync.Mutex
+	mu               sync.RWMutex
+	config           *config.Repository
+	service          *Service
+	assembler        *HTTPAssembler
+	remote           VideoRemoteClient
+	workspace        *WorkspaceManager
+	cli              *CLIExecutor
+	assets           *asset.Repository
+	accepting        bool
+	attempts         map[string]*videoAttemptRun
+	pendingTerminal  map[string]pendingTerminalUpdate
+	presetSem        map[string]*videoLimiter
+	batchSem         map[string]*videoLimiter
+	batchQueues      map[string]*videoBatchQueue
+	subscribers      map[string]map[uint64]chan AttemptEvent
+	nextSubID        uint64
+	done             chan struct{}
+	doneOnce         sync.Once
+	shutdownOnce     sync.Once
+	shutdownComplete chan struct{}
+	shutdownErr      error
+	starts           sync.WaitGroup
+	wg               sync.WaitGroup
 }
 
 func NewManager(configuration *config.Repository, service *Service, assembler *HTTPAssembler, remote VideoRemoteClient, workspace *WorkspaceManager, cli *CLIExecutor, assets *asset.Repository) *Manager {
 	manager := &Manager{
 		config: configuration, service: service, assembler: assembler, remote: remote, workspace: workspace, cli: cli, assets: assets,
-		accepting: true, attempts: make(map[string]*videoAttemptRun), presetSem: make(map[string]*videoLimiter),
+		accepting: true, attempts: make(map[string]*videoAttemptRun), pendingTerminal: make(map[string]pendingTerminalUpdate), presetSem: make(map[string]*videoLimiter),
 		batchSem: make(map[string]*videoLimiter), batchQueues: make(map[string]*videoBatchQueue),
-		subscribers: make(map[string]map[uint64]chan AttemptEvent), done: make(chan struct{}),
+		subscribers: make(map[string]map[uint64]chan AttemptEvent), done: make(chan struct{}), shutdownComplete: make(chan struct{}),
 	}
 	return manager
 }
@@ -180,6 +190,10 @@ func (manager *Manager) StartBatch(batchID string) ([]Attempt, error) {
 	if !ok {
 		return nil, ErrBatchNotFound
 	}
+	if err := manager.recoverPendingTerminal(batchID); err != nil {
+		return nil, err
+	}
+	batch, _ = manager.service.Get(batchID)
 	preset, err := manager.lookupPreset(batch)
 	if err != nil {
 		return nil, err
@@ -224,6 +238,10 @@ func (manager *Manager) StartItem(batchID, itemID string) (Attempt, error) {
 	if !ok {
 		return Attempt{}, ErrBatchNotFound
 	}
+	if err := manager.recoverPendingTerminal(batchID); err != nil {
+		return Attempt{}, err
+	}
+	batch, _ = manager.service.Get(batchID)
 	position := itemIndex(batch.Items, itemID)
 	if position < 0 {
 		return Attempt{}, ErrItemNotFound
@@ -249,6 +267,18 @@ func (manager *Manager) Retry(attemptID string) (Attempt, error) {
 	if !ok {
 		return Attempt{}, ErrAttemptNotFound
 	}
+	manager.mu.RLock()
+	_, pending := manager.pendingTerminal[attemptID]
+	manager.mu.RUnlock()
+	if pending {
+		if err := manager.retryPendingTerminal(attemptID); err != nil {
+			return Attempt{}, fmt.Errorf("recover terminal video attempt %s: %w", attemptID, err)
+		}
+		attempt, ok = manager.GetAttempt(attemptID)
+		if !ok {
+			return Attempt{}, ErrAttemptNotFound
+		}
+	}
 	if !terminalAttemptState(attempt.State) {
 		return Attempt{}, ErrActiveAttempt
 	}
@@ -261,17 +291,76 @@ func (manager *Manager) GetAttempt(attemptID string) (Attempt, bool) {
 	manager.mu.RUnlock()
 	if run != nil {
 		if attempt, ok := manager.attemptFrom(run.batchID, run.itemID, attemptID); ok {
-			return attempt, true
+			return manager.decoratePendingTerminal(attempt), true
 		}
 	}
 	for _, batch := range manager.service.List(Filter{}) {
 		for _, item := range batch.Items {
 			if position := attemptIndex(item.Attempts, attemptID); position >= 0 {
-				return cloneAttempt(item.Attempts[position]), true
+				return manager.decoratePendingTerminal(cloneAttempt(item.Attempts[position])), true
 			}
 		}
 	}
 	return Attempt{}, false
+}
+
+func (manager *Manager) decoratePendingTerminal(attempt Attempt) Attempt {
+	manager.mu.RLock()
+	attempt = manager.decoratePendingTerminalLocked(attempt)
+	manager.mu.RUnlock()
+	return attempt
+}
+
+func (manager *Manager) decoratePendingTerminalLocked(attempt Attempt) Attempt {
+	if pending, ok := manager.pendingTerminal[attempt.ID]; ok {
+		attempt.Error = AttemptError{Code: "storage_failure", Message: boundedVideoError(pending.lastErr.Error())}
+	}
+	return attempt
+}
+
+func (manager *Manager) recoverPendingTerminal(batchID string) error {
+	manager.mu.RLock()
+	ids := make([]string, 0)
+	for id, pending := range manager.pendingTerminal {
+		if pending.run.batchID == batchID {
+			ids = append(ids, id)
+		}
+	}
+	manager.mu.RUnlock()
+	for _, id := range ids {
+		if err := manager.retryPendingTerminal(id); err != nil {
+			return fmt.Errorf("recover terminal video attempt %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func (manager *Manager) retryPendingTerminal(attemptID string) error {
+	manager.mu.RLock()
+	pending, ok := manager.pendingTerminal[attemptID]
+	manager.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	attempt, err := manager.service.UpdateAttempt(pending.run.batchID, pending.run.itemID, pending.run.attemptID, pending.input)
+	if err != nil {
+		if current, exists := manager.attemptFrom(pending.run.batchID, pending.run.itemID, pending.run.attemptID); exists && terminalAttemptState(current.State) {
+			err = nil
+			attempt = current
+		}
+	}
+	manager.mu.Lock()
+	if err == nil {
+		delete(manager.pendingTerminal, attemptID)
+	} else {
+		pending.lastErr = err
+		manager.pendingTerminal[attemptID] = pending
+	}
+	manager.mu.Unlock()
+	if err == nil {
+		manager.publish(pending.run.batchID, AttemptEvent{Type: "state", Attempt: attempt})
+	}
+	return err
 }
 
 func (manager *Manager) start(batch Batch, item Item, preset videoPreset) (Attempt, error) {
@@ -330,7 +419,7 @@ func (manager *Manager) cancelUnenqueuedRuns(runs []*videoAttemptRun, code strin
 		}
 		input := updateFor(current, AttemptCancelled)
 		input.Error = AttemptError{Code: code, Message: "video batch scheduling did not complete"}
-		if _, err := manager.updateAttempt(run, input); err != nil {
+		if _, err := manager.completeAttempt(run, input); err != nil {
 			failures = append(failures, fmt.Errorf("cancel unqueued video attempt %s: %w", run.attemptID, err))
 		}
 	}
@@ -542,14 +631,14 @@ func (manager *Manager) runHTTP(run *videoAttemptRun) {
 			if job.Error != nil {
 				input.Error = AttemptError{Code: job.Error.Code, Message: boundedVideoError(job.Error.Message)}
 			}
-			_, _ = manager.updateAttempt(run, input)
+			_, _ = manager.completeAttempt(run, input)
 			run.lifecycle.Unlock()
 			return
 		case "cancelled":
 			input := updateFor(current, AttemptCancelled)
 			input.RemoteJobID, input.RemoteStatus, input.QueuePosition = submission.ID, job.Status, job.QueuePosition
 			input.Error = AttemptError{}
-			_, _ = manager.updateAttempt(run, input)
+			_, _ = manager.completeAttempt(run, input)
 			run.lifecycle.Unlock()
 			return
 		case "completed":
@@ -558,7 +647,7 @@ func (manager *Manager) runHTTP(run *videoAttemptRun) {
 				input := updateFor(current, AttemptFailed)
 				input.RemoteJobID, input.RemoteStatus, input.QueuePosition = submission.ID, job.Status, job.QueuePosition
 				input.Error = AttemptError{Code: "invalid_result", Message: boundedVideoError(err.Error())}
-				_, _ = manager.updateAttempt(run, input)
+				_, _ = manager.completeAttempt(run, input)
 				run.lifecycle.Unlock()
 				return
 			}
@@ -566,7 +655,7 @@ func (manager *Manager) runHTTP(run *videoAttemptRun) {
 			input.RemoteJobID, input.RemoteStatus, input.QueuePosition = submission.ID, job.Status, job.QueuePosition
 			input.ActualFrameCount = job.Result.FrameCount
 			input.Error = AttemptError{}
-			_, _ = manager.updateAttempt(run, input)
+			_, _ = manager.completeAttempt(run, input)
 			run.lifecycle.Unlock()
 			return
 		default:
@@ -685,7 +774,7 @@ func (manager *Manager) finishHTTPError(run *videoAttemptRun, current Attempt, c
 	}
 	input := updateFor(current, state)
 	input.Error = AttemptError{Code: code, Message: boundedVideoError(err.Error())}
-	_, _ = manager.updateAttempt(run, input)
+	_, _ = manager.completeAttempt(run, input)
 }
 
 func (manager *Manager) fail(run *videoAttemptRun, code, message string) {
@@ -695,7 +784,7 @@ func (manager *Manager) fail(run *videoAttemptRun, code, message string) {
 	}
 	input := updateFor(current, AttemptFailed)
 	input.Error = AttemptError{Code: code, Message: boundedVideoError(message)}
-	_, _ = manager.updateAttempt(run, input)
+	_, _ = manager.completeAttempt(run, input)
 }
 
 func updateFor(current Attempt, state AttemptState) UpdateAttemptInput {
@@ -723,6 +812,23 @@ func (manager *Manager) updateAttempt(run *videoAttemptRun, input UpdateAttemptI
 		}
 	}
 	return attempt, err
+}
+
+func (manager *Manager) completeAttempt(run *videoAttemptRun, input UpdateAttemptInput) (Attempt, error) {
+	attempt, err := manager.updateAttempt(run, input)
+	if err == nil {
+		manager.mu.Lock()
+		delete(manager.pendingTerminal, run.attemptID)
+		manager.mu.Unlock()
+		return attempt, nil
+	}
+	current, _ := manager.attemptFrom(run.batchID, run.itemID, run.attemptID)
+	manager.mu.Lock()
+	manager.pendingTerminal[run.attemptID] = pendingTerminalUpdate{run: run, input: input, lastErr: err}
+	manager.mu.Unlock()
+	current.Error = AttemptError{Code: "storage_failure", Message: boundedVideoError(err.Error())}
+	manager.publish(run.batchID, AttemptEvent{Type: "persistence_error", Attempt: current})
+	return current, err
 }
 
 func (manager *Manager) attemptFrom(batchID, itemID, attemptID string) (Attempt, bool) {
@@ -851,7 +957,7 @@ func (manager *Manager) runCLI(run *videoAttemptRun) {
 		if current, updateErr := manager.updateAttempt(run, started); updateErr == nil {
 			input := updateFor(current, AttemptFailed)
 			input.Error = AttemptError{Code: "workspace_prepare_failed", Message: boundedVideoError(prepareErr.Error())}
-			_, _ = manager.updateAttempt(run, input)
+			_, _ = manager.completeAttempt(run, input)
 		}
 		run.lifecycle.Unlock()
 		return
@@ -863,7 +969,7 @@ func (manager *Manager) runCLI(run *videoAttemptRun) {
 		if current, updateErr := manager.updateAttempt(run, started); updateErr == nil {
 			input := updateFor(current, AttemptFailed)
 			input.Error = AttemptError{Code: "template_failed", Message: boundedVideoError(templateErr.Error())}
-			_, _ = manager.updateAttempt(run, input)
+			_, _ = manager.completeAttempt(run, input)
 		}
 		run.lifecycle.Unlock()
 		return
@@ -940,19 +1046,19 @@ func (manager *Manager) finishCLIRun(run *videoAttemptRun, before Attempt, resul
 		}
 		input := updateFor(current, state)
 		input.Error = AttemptError{Code: code, Message: boundedVideoError(message)}
-		_, _ = manager.updateAttempt(run, input)
+		_, _ = manager.completeAttempt(run, input)
 		return
 	}
 	updated, err := manager.importCLIResult(run, current, result)
 	if err != nil {
 		input := updateFor(current, AttemptFailed)
 		input.Error = AttemptError{Code: "invalid_result", Message: boundedVideoError(err.Error())}
-		_, _ = manager.updateAttempt(run, input)
+		_, _ = manager.completeAttempt(run, input)
 		return
 	}
 	input := updateFor(updated, AttemptSucceeded)
 	input.Error = AttemptError{}
-	_, _ = manager.updateAttempt(run, input)
+	_, _ = manager.completeAttempt(run, input)
 }
 
 func (manager *Manager) importCLIResult(run *videoAttemptRun, current Attempt, result CLIRunResult) (Attempt, error) {
@@ -1154,9 +1260,21 @@ func cloneStringValues(source map[string]string) map[string]string {
 }
 
 func (manager *Manager) cancelQueued(run *videoAttemptRun, cause error) {
+	run.lifecycle.Lock()
+	defer run.lifecycle.Unlock()
+	manager.cancelQueuedLocked(run, cause)
+}
+
+func (manager *Manager) cancelQueuedLocked(run *videoAttemptRun, cause error) error {
 	current, ok := manager.GetAttempt(run.attemptID)
-	if !ok || current.State != AttemptQueued {
-		return
+	if !ok {
+		return ErrAttemptNotFound
+	}
+	if terminalAttemptState(current.State) {
+		return nil
+	}
+	if current.State != AttemptQueued {
+		return ErrInvalidAttemptTransition
 	}
 	input := updateFor(current, AttemptCancelled)
 	message := "video attempt cancelled while queued"
@@ -1164,12 +1282,16 @@ func (manager *Manager) cancelQueued(run *videoAttemptRun, cause error) {
 		message = boundedVideoError(cause.Error())
 	}
 	input.Error = AttemptError{Code: "cancelled", Message: message}
-	_, _ = manager.updateAttempt(run, input)
+	_, err := manager.completeAttempt(run, input)
+	return err
 }
 
 func (manager *Manager) finishRun(run *videoAttemptRun) {
 	attempt, ok := manager.GetAttempt(run.attemptID)
-	if ok && activeAttemptState(attempt.State) {
+	manager.mu.RLock()
+	_, hasPendingTerminal := manager.pendingTerminal[run.attemptID]
+	manager.mu.RUnlock()
+	if ok && activeAttemptState(attempt.State) && !hasPendingTerminal {
 		return
 	}
 	manager.mu.Lock()
@@ -1201,6 +1323,13 @@ func (manager *Manager) publish(batchID string, event AttemptEvent) {
 }
 
 func (manager *Manager) Cancel(attemptID string) error {
+	return manager.cancelWithContext(context.Background(), attemptID)
+}
+
+func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string) error {
+	if ctx == nil {
+		return errors.New("video cancellation context is nil")
+	}
 	manager.mu.RLock()
 	run := manager.attempts[attemptID]
 	manager.mu.RUnlock()
@@ -1225,10 +1354,7 @@ func (manager *Manager) Cancel(attemptID string) error {
 	}
 	if current.State == AttemptQueued {
 		run.cancel()
-		input := updateFor(current, AttemptCancelled)
-		input.Error = AttemptError{Code: "cancelled", Message: "video attempt cancelled by user"}
-		_, err := manager.updateAttempt(run, input)
-		return err
+		return manager.cancelQueuedLocked(run, nil)
 	}
 	switch run.preset.kind {
 	case videoconfig.ExecutionHTTP:
@@ -1236,12 +1362,12 @@ func (manager *Manager) Cancel(attemptID string) error {
 			run.cancel()
 			input := updateFor(current, AttemptCancelled)
 			input.Error = AttemptError{Code: "cancelled", Message: "video attempt cancelled by user"}
-			_, err := manager.updateAttempt(run, input)
+			_, err := manager.completeAttempt(run, input)
 			return err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.preset.http.ConnectTimeoutSeconds)*time.Second)
+		cancelCtx, cancel := context.WithTimeout(ctx, time.Duration(run.preset.http.ConnectTimeoutSeconds)*time.Second)
 		defer cancel()
-		err := manager.remote.Cancel(ctx, *run.preset.http, current.RemoteJobID)
+		err := manager.remote.Cancel(cancelCtx, *run.preset.http, current.RemoteJobID)
 		var httpError *sdcpp.HTTPError
 		if errors.As(err, &httpError) && httpError.StatusCode == 409 {
 			input := updateFor(current, AttemptPolling)
@@ -1260,19 +1386,19 @@ func (manager *Manager) Cancel(attemptID string) error {
 		input := updateFor(current, AttemptCancelled)
 		input.RemoteStatus = "cancelled"
 		input.Error = AttemptError{Code: "cancelled", Message: "video attempt cancelled by user"}
-		_, updateErr := manager.updateAttempt(run, input)
+		_, updateErr := manager.completeAttempt(run, input)
 		return updateErr
 	case videoconfig.ExecutionLocalCLI:
 		run.cancel()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		stopErr := manager.cli.Stop(ctx, current.ID)
+		stopCtx, cancel := context.WithTimeout(ctx, time.Second)
+		stopErr := manager.cli.Stop(stopCtx, current.ID)
 		cancel()
 		if stopErr != nil && !errors.Is(stopErr, ErrCLIAttemptNotRunning) && !errors.Is(stopErr, ErrCLIAttemptNotFound) {
 			return stopErr
 		}
 		input := updateFor(current, AttemptCancelled)
 		input.Error = AttemptError{Code: "cancelled", Message: "video attempt cancelled by user"}
-		_, updateErr := manager.updateAttempt(run, input)
+		_, updateErr := manager.completeAttempt(run, input)
 		return updateErr
 	default:
 		return fmt.Errorf("unsupported video execution kind %q", run.preset.kind)
@@ -1305,7 +1431,7 @@ func (manager *Manager) SubscribeBatch(batchID string) (<-chan AttemptEvent, fun
 		if len(item.Attempts) == 0 {
 			continue
 		}
-		initial = append(initial, cloneAttempt(item.Attempts[len(item.Attempts)-1]))
+		initial = append(initial, manager.decoratePendingTerminalLocked(cloneAttempt(item.Attempts[len(item.Attempts)-1])))
 	}
 	snapshot := AttemptEvent{Type: "snapshot", BatchID: batchID, Attempts: cloneAttemptEvents(initial)}
 	if len(initial) > 0 {
@@ -1393,84 +1519,81 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("video manager shutdown context is nil")
 	}
-	manager.mu.Lock()
-	manager.accepting = false
-	for batchID, subscribers := range manager.subscribers {
-		for subscriberID, stream := range subscribers {
-			delete(subscribers, subscriberID)
-			close(stream)
+	manager.shutdownOnce.Do(func() {
+		manager.mu.Lock()
+		manager.accepting = false
+		for batchID, subscribers := range manager.subscribers {
+			for subscriberID, stream := range subscribers {
+				delete(subscribers, subscriberID)
+				close(stream)
+			}
+			delete(manager.subscribers, batchID)
 		}
-		delete(manager.subscribers, batchID)
-	}
-	manager.mu.Unlock()
-	starts := make(chan struct{})
-	go func() { manager.starts.Wait(); close(starts) }()
+		manager.mu.Unlock()
+		go manager.shutdownBackground(ctx)
+	})
 	select {
-	case <-starts:
+	case <-manager.shutdownComplete:
+		manager.mu.RLock()
+		err := manager.shutdownErr
+		manager.mu.RUnlock()
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (manager *Manager) shutdownBackground(shutdownCtx context.Context) {
+	manager.starts.Wait()
 	manager.mu.RLock()
 	runs := make([]*videoAttemptRun, 0, len(manager.attempts))
 	for _, run := range manager.attempts {
 		runs = append(runs, run)
 	}
 	manager.mu.RUnlock()
-	var shutdownErrors []error
-	uncancellable := false
-	bound := time.Second
+	graceCtx, cancelGrace := context.WithTimeout(shutdownCtx, time.Second)
+	defer cancelGrace()
+	cancelResults := make(chan error, len(runs))
 	for _, run := range runs {
-		before, ok := manager.GetAttempt(run.attemptID)
-		if !ok || terminalAttemptState(before.State) {
-			continue
-		}
-		if run.preset.http != nil && run.preset.http.ConnectTimeoutSeconds > 0 {
-			candidate := time.Duration(run.preset.http.ConnectTimeoutSeconds) * time.Second
-			if candidate < bound {
-				bound = candidate
+		go func(run *videoAttemptRun) {
+			err := manager.cancelWithContext(graceCtx, run.attemptID)
+			if err != nil && !errors.Is(err, ErrAttemptNotFound) {
+				err = fmt.Errorf("cancel video attempt %s: %w", run.attemptID, err)
 			}
+			cancelResults <- err
+		}(run)
+	}
+	var shutdownErrors []error
+	for range runs {
+		select {
+		case err := <-cancelResults:
+			if err != nil {
+				shutdownErrors = append(shutdownErrors, err)
+			}
+		case <-graceCtx.Done():
+			shutdownErrors = append(shutdownErrors, graceCtx.Err())
+			goto cancellationsDone
 		}
-		if err := manager.Cancel(run.attemptID); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("cancel video attempt %s: %w", run.attemptID, err))
-		}
-		after, exists := manager.GetAttempt(run.attemptID)
-		if exists && activeAttemptState(after.State) && after.ExecutionKind == videoconfig.ExecutionHTTP && after.RemoteJobID != "" {
-			uncancellable = true
-		}
+	}
+
+cancellationsDone:
+	// Remote 409 and transport errors intentionally leave durable attempts
+	// active. Stopping local contexts ends polling without falsely recording a
+	// remote terminal state; Repository.Open will mark them interrupted later.
+	for _, run := range runs {
+		run.cancel()
 	}
 	if manager.cli != nil {
-		if err := manager.cli.Shutdown(ctx); err != nil && !errors.Is(err, ErrCLIExecutorShutdown) {
+		cliCtx, cancelCLI := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := manager.cli.Shutdown(cliCtx); err != nil && !errors.Is(err, ErrCLIExecutorShutdown) {
 			shutdownErrors = append(shutdownErrors, err)
 		}
+		cancelCLI()
 	}
-	finished := make(chan struct{})
-	go func() { manager.wg.Wait(); close(finished) }()
-	if uncancellable {
-		timer := time.NewTimer(bound)
-		defer timer.Stop()
-		select {
-		case <-finished:
-		case <-timer.C:
-			// A remote 409 deliberately leaves the durable state polling: the
-			// server may still finish it.  Shutdown must nevertheless stop our
-			// local pollers once the bounded grace period expires.
-			for _, run := range runs {
-				attempt, ok := manager.GetAttempt(run.attemptID)
-				if ok && activeAttemptState(attempt.State) && attempt.ExecutionKind == videoconfig.ExecutionHTTP {
-					run.cancel()
-				}
-			}
-		case <-ctx.Done():
-			return errors.Join(errors.Join(shutdownErrors...), ctx.Err())
-		}
-		manager.doneOnce.Do(func() { close(manager.done) })
-		return errors.Join(shutdownErrors...)
-	}
-	select {
-	case <-finished:
-		manager.doneOnce.Do(func() { close(manager.done) })
-		return errors.Join(shutdownErrors...)
-	case <-ctx.Done():
-		return errors.Join(errors.Join(shutdownErrors...), ctx.Err())
-	}
+	manager.wg.Wait()
+	manager.doneOnce.Do(func() { close(manager.done) })
+	manager.mu.Lock()
+	manager.shutdownErr = errors.Join(shutdownErrors...)
+	manager.mu.Unlock()
+	close(manager.shutdownComplete)
 }

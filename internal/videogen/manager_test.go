@@ -253,19 +253,59 @@ func TestManagerRetainsImportedHTTPAssetWhenAttachmentFails(t *testing.T) {
 	}
 	fixture.remote.completeVideo(validWebM(), "video/webm", 16, 2)
 	deadline := time.Now().Add(time.Second)
+	imported := false
 	for {
 		for _, stored := range fixture.assets.List(asset.Filter{}) {
 			if stored.Source == "videogen:"+created.ID {
 				if stored.State != asset.StateArchive {
 					t.Fatalf("retained partial result = %#v", stored)
 				}
-				return
+				imported = true
+				break
 			}
+		}
+		if imported {
+			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("imported video asset was rolled back after attachment failure")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	// Let the terminal write exhaust its bounded retries while storage is
+	// unavailable, then restore storage. A new start must recover the pending
+	// terminal transition instead of treating the dead run as active forever.
+	deadline = time.Now().Add(time.Second)
+	for {
+		pending, _ := fixture.manager.GetAttempt(created.ID)
+		if pending.Error.Code == "storage_failure" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminal persistence failure was not observable")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	events, unsubscribe, err := fixture.manager.SubscribeBatch(batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := <-events
+	unsubscribe()
+	if len(snapshot.Attempts) != 1 || snapshot.Attempts[0].Error.Code != "storage_failure" {
+		t.Fatalf("pending persistence snapshot = %#v", snapshot)
+	}
+	if err := os.RemoveAll(backupPath); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := fixture.manager.Retry(created.ID)
+	if err != nil {
+		t.Fatalf("start after terminal persistence recovery: %v", err)
+	}
+	fixture.waitTerminal([]Attempt{retry})
+	recovered, _ := fixture.manager.GetAttempt(created.ID)
+	if recovered.State != AttemptFailed || recovered.Error.Code != "invalid_result" {
+		t.Fatalf("recovered terminal attempt = %#v", recovered)
 	}
 }
 
@@ -380,6 +420,37 @@ func TestManagerCancelsQueuedAttemptWithoutRemoteRequest(t *testing.T) {
 	if cancelled.State != AttemptCancelled || fixture.remote.cancelCount() != 0 {
 		t.Fatalf("queued cancellation = %#v, remote cancels = %d", cancelled, fixture.remote.cancelCount())
 	}
+	fixture.remote.releaseAll()
+	fixture.waitTerminal([]Attempt{attempts[0]})
+}
+
+// This fails if dispatcher-side queued cancellation bypasses the per-run
+// lifecycle lock and can race the public Cancel transition.
+func TestManagerSerializesQueuedCancellation(t *testing.T) {
+	fixture := newVideoManagerFixture(t, "http", 1)
+	batch := fixture.createBatch("one", "http-preset", 1, 2)
+	fixture.remote.blockSubmissions()
+	attempts, err := fixture.manager.StartBatch(batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.remote.waitForActive(t, 1)
+	fixture.manager.mu.RLock()
+	run := fixture.manager.attempts[attempts[1].ID]
+	fixture.manager.mu.RUnlock()
+	if run == nil {
+		t.Fatal("queued run is missing")
+	}
+	run.lifecycle.Lock()
+	run.cancel()
+	time.Sleep(50 * time.Millisecond)
+	blocked, _ := fixture.manager.GetAttempt(attempts[1].ID)
+	if blocked.State != AttemptQueued {
+		run.lifecycle.Unlock()
+		t.Fatalf("queued cancellation bypassed lifecycle lock: %#v", blocked)
+	}
+	run.lifecycle.Unlock()
+	fixture.waitTerminal([]Attempt{attempts[1]})
 	fixture.remote.releaseAll()
 	fixture.waitTerminal([]Attempt{attempts[0]})
 }
@@ -738,6 +809,80 @@ func TestManagerShutdownStopsPollingAfterRemoteCancelConflict(t *testing.T) {
 	}
 }
 
+// This fails if Shutdown serializes per-attempt remote cancellation using
+// independent background timeouts instead of honoring its caller deadline.
+func TestManagerShutdownBoundsParallelRemoteCancellation(t *testing.T) {
+	fixture := newVideoManagerFixture(t, "http", 3)
+	batch := fixture.createBatch("one", "http-preset", 3, 3)
+	fixture.remote.setJobStatus("generating", 1)
+	attempts, err := fixture.manager.StartBatch(batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, attempt := range attempts {
+		fixture.waitForState(attempt.ID, AttemptPolling)
+	}
+	fixture.remote.setCancelDelay(250 * time.Millisecond)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = fixture.manager.Shutdown(shutdownCtx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("shutdown exceeded global deadline: %v", elapsed)
+	}
+}
+
+// This covers the Manager-level recovery boundary: Repository.Open converts
+// an abandoned active record to interrupted, and the new Manager can retry it.
+func TestManagerReopenExposesInterruptedAttemptAndPermitsRetry(t *testing.T) {
+	fixture := newVideoManagerFixture(t, "http", 1)
+	batch := fixture.createBatch("one", "http-preset", 1, 1)
+	preset, err := fixture.manager.lookupPreset(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err := fixture.manager.preflight(batch, batch.Items[0], preset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandoned, err := fixture.service.CreateAttempt(batch.ID, batch.Items[0].ID, CreateAttemptInput{State: AttemptQueued, Snapshot: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := OpenRepository(fixture.service.repository.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(repository, fixture.assets)
+	manager := NewManager(fixture.config, service, NewHTTPAssembler(fixture.assets), newVideoRemoteFake(), fixture.workspace, NewCLIExecutor(), fixture.assets)
+	defer func() { _ = manager.Shutdown(context.Background()) }()
+	got, ok := manager.GetAttempt(abandoned.ID)
+	if !ok || got.State != AttemptInterrupted {
+		t.Fatalf("reopened attempt = %#v, exists=%v", got, ok)
+	}
+	retried, err := manager.Retry(abandoned.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, ok := manager.GetAttempt(retried.ID)
+		if ok && terminalAttemptState(got.State) {
+			if got.State != AttemptSucceeded {
+				t.Fatalf("retried attempt = %#v", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retried attempt did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 type videoManagerFixture struct {
 	config    *config.Repository
 	assets    *asset.Repository
@@ -855,17 +1000,18 @@ func videoManagerCLIPreset() videoconfig.CLIPreset {
 }
 
 type videoRemoteFake struct {
-	mu        sync.Mutex
-	block     bool
-	release   chan struct{}
-	active    int
-	maximum   int
-	submits   int
-	prompts   []string
-	completed sdcpp.VideoJob
-	cancelErr error
-	cancels   int
-	jobs      int
+	mu          sync.Mutex
+	block       bool
+	release     chan struct{}
+	active      int
+	maximum     int
+	submits     int
+	prompts     []string
+	completed   sdcpp.VideoJob
+	cancelErr   error
+	cancelDelay time.Duration
+	cancels     int
+	jobs        int
 }
 
 func (remote *videoRemoteFake) setJobStatus(status string, position int) {
@@ -889,6 +1035,12 @@ func (remote *videoRemoteFake) setRawResult(value string) {
 func (remote *videoRemoteFake) setCancelError(err error) {
 	remote.mu.Lock()
 	remote.cancelErr = err
+	remote.mu.Unlock()
+}
+
+func (remote *videoRemoteFake) setCancelDelay(delay time.Duration) {
+	remote.mu.Lock()
+	remote.cancelDelay = delay
 	remote.mu.Unlock()
 }
 
@@ -940,11 +1092,21 @@ func (remote *videoRemoteFake) jobCount() int {
 	return remote.jobs
 }
 
-func (remote *videoRemoteFake) Cancel(_ context.Context, _ videoconfig.HTTPProvider, _ string) error {
+func (remote *videoRemoteFake) Cancel(ctx context.Context, _ videoconfig.HTTPProvider, _ string) error {
 	remote.mu.Lock()
-	defer remote.mu.Unlock()
 	remote.cancels++
-	return remote.cancelErr
+	delay, err := remote.cancelDelay, remote.cancelErr
+	remote.mu.Unlock()
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
 }
 
 func (remote *videoRemoteFake) cancelCount() int {
