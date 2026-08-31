@@ -109,9 +109,8 @@ func (assembler *HTTPAssembler) BuildHTTP(batch Batch, item Item, provider video
 	if !hasHTTPHeader(headers, "Content-Type") {
 		headers["Content-Type"] = "application/json"
 	}
-	preparedProvider := provider
-	preparedProvider.Headers = cloneHTTPHeaders(provider.Headers)
-	redactedProvider := provider
+	preparedProvider := cloneHTTPProvider(provider)
+	redactedProvider := cloneHTTPProvider(provider)
 	redactedProvider.Headers = redactHTTPHeaders(provider.Headers)
 	return PreparedHTTP{
 			URL: provider.BaseURL + "/sdcpp/v1/vid_gen", Headers: headers, Body: body, Provider: preparedProvider,
@@ -171,6 +170,13 @@ func cloneHTTPHeaders(source map[string]string) map[string]string {
 	for key, value := range source {
 		clone[key] = value
 	}
+	return clone
+}
+
+func cloneHTTPProvider(source videoconfig.HTTPProvider) videoconfig.HTTPProvider {
+	clone := source
+	clone.Headers = cloneHTTPHeaders(source.Headers)
+	clone.DefaultParams = append(json.RawMessage(nil), source.DefaultParams...)
 	return clone
 }
 

@@ -134,6 +134,19 @@ func TestHTTPAssemblerRedactsProviderSecretsInSnapshot(t *testing.T) {
 	}
 }
 
+func TestHTTPAssemblerCopiesProviderDefaultParamsForReturnedSnapshots(t *testing.T) {
+	assembler, _, batch, item, provider := httpAssemblerFixture(t)
+	want := append(json.RawMessage(nil), provider.DefaultParams...)
+	prepared, snapshot, err := assembler.BuildHTTP(batch, item, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.DefaultParams[0] = '['
+	if !bytes.Equal(snapshot.HTTPProvider.DefaultParams, want) || !bytes.Equal(prepared.Provider.DefaultParams, want) {
+		t.Fatalf("provider mutation changed returned copies: snapshot=%s prepared=%s want=%s", snapshot.HTTPProvider.DefaultParams, prepared.Provider.DefaultParams, want)
+	}
+}
+
 func httpAssemblerFixture(t *testing.T) (*HTTPAssembler, *asset.Repository, Batch, Item, videoconfig.HTTPProvider) {
 	t.Helper()
 	assets, err := asset.OpenRepository(t.TempDir()+"/assets.json", t.TempDir()+"/files")
