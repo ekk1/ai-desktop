@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,25 @@ func TestCLIExecutorStopCancellationStillKillsAndReapsGroup(t *testing.T) {
 	}
 	result := <-completed
 	if result.result.State != CLIStateStopped {
+		t.Fatalf("result = %#v, error = %v", result.result, result.err)
+	}
+	if err := waitForProcessGroupGone(status.PID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCLIExecutorStopKillsTermIgnoringChildAfterShellExitsZero(t *testing.T) {
+	executor := NewCLIExecutor()
+	request := fixtureCLIRunRequest(t, "", `(trap '' TERM; exec sleep 30) & child=$!; printf '%s' "$child" > "$OUTPUT_DIR/child"; trap 'exit 0' TERM; while :; do sleep 30; done`)
+	request.StopGrace = 30 * time.Millisecond
+	completed := runCLIAsync(executor, request)
+	status := waitForCLIProcess(t, executor, request.AttemptID, CLIStateRunning)
+	waitForPath(t, filepath.Join(request.OutputDir, "child"))
+	if err := executor.Stop(context.Background(), request.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	result := <-completed
+	if result.err != nil || result.result.State != CLIStateStopped || result.result.ExitCode != 0 {
 		t.Fatalf("result = %#v, error = %v", result.result, result.err)
 	}
 	if err := waitForProcessGroupGone(status.PID); err != nil {
@@ -389,6 +409,19 @@ func TestCLIExecutorRejectsInvalidAttemptIdentityAndEnvironment(t *testing.T) {
 				t.Fatal("Run accepted invalid execution identity or environment")
 			}
 		})
+	}
+}
+
+func TestCLIExecutorRejectsRelativeWorkDirAndMaxOutputOverflow(t *testing.T) {
+	for _, change := range []func(*CLIRunRequest){
+		func(request *CLIRunRequest) { request.WorkDir = "relative" },
+		func(request *CLIRunRequest) { request.MaxOutputBytes = math.MaxInt64 },
+	} {
+		request := fixtureCLIRunRequest(t, "", `printf '\x1a\x45\xdf\xa3' > "$OUTPUT_PATH"`)
+		change(&request)
+		if _, err := NewCLIExecutor().Run(context.Background(), request); err == nil {
+			t.Fatal("Run accepted an unsafe direct execution request")
+		}
 	}
 }
 

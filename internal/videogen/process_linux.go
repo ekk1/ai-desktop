@@ -28,12 +28,13 @@ var (
 type CLIRunState string
 
 const (
-	CLIStatePreparing CLIRunState = "preparing"
-	CLIStateRunning   CLIRunState = "running"
-	CLIStateStopping  CLIRunState = "stopping"
-	CLIStateSucceeded CLIRunState = "succeeded"
-	CLIStateFailed    CLIRunState = "failed"
-	CLIStateStopped   CLIRunState = "stopped"
+	CLIStatePreparing  CLIRunState = "preparing"
+	CLIStateRunning    CLIRunState = "running"
+	CLIStateStopping   CLIRunState = "stopping"
+	CLIStateValidating CLIRunState = "validating"
+	CLIStateSucceeded  CLIRunState = "succeeded"
+	CLIStateFailed     CLIRunState = "failed"
+	CLIStateStopped    CLIRunState = "stopped"
 )
 
 // CLIRunRequest contains already-expanded trusted shell commands and the one
@@ -118,7 +119,7 @@ func (executor *CLIExecutor) Run(ctx context.Context, request CLIRunRequest) (CL
 	if err := validateCLIEnvironment(request.Env); err != nil {
 		return CLIRunResult{}, err
 	}
-	if request.Timeout <= 0 || request.StopGrace < 0 || request.LogBufferBytes < 1 || request.MaxOutputBytes < 1 {
+	if !filepath.IsAbs(request.WorkDir) || request.Timeout <= 0 || request.StopGrace < 0 || request.LogBufferBytes < 1 || request.MaxOutputBytes < 1 || request.MaxOutputBytes == maxCLIOutputBytes {
 		return CLIRunResult{}, fmt.Errorf("video CLI execution limits are invalid")
 	}
 
@@ -174,6 +175,9 @@ func (executor *CLIExecutor) Run(ctx context.Context, request CLIRunRequest) (CL
 	}
 	if err != nil {
 		return executor.finish(attempt, CLIStateFailed, err, "", 0)
+	}
+	if !executor.beginValidation(attempt) {
+		return executor.finish(attempt, CLIStateStopped, nil, "", 0)
 	}
 	outputSize, err := validateCLIOutput(request)
 	if err != nil {
@@ -247,30 +251,9 @@ func (executor *CLIExecutor) Stop(ctx context.Context, attemptID string) error {
 	done := attempt.done
 	executor.mu.Unlock()
 
-	termErr := signalCLIProcessGroup(pid, syscall.SIGTERM)
-	if errors.Is(termErr, syscall.ESRCH) {
-		termErr = nil
-	}
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	select {
-	case <-done:
-		return termErr
-	case <-ctx.Done():
-		killErr := signalCLIProcessGroup(pid, syscall.SIGKILL)
-		if errors.Is(killErr, syscall.ESRCH) {
-			killErr = nil
-		}
-		<-done
-		return errors.Join(ctx.Err(), termErr, killErr)
-	case <-timer.C:
-		killErr := signalCLIProcessGroup(pid, syscall.SIGKILL)
-		if errors.Is(killErr, syscall.ESRCH) {
-			killErr = nil
-		}
-		<-done
-		return errors.Join(termErr, killErr)
-	}
+	stopErr := stopCLIProcessGroup(ctx, pid, grace)
+	<-done
+	return stopErr
 }
 
 func (executor *CLIExecutor) Status(attemptID string) (CLIRunStatus, error) {
@@ -394,6 +377,16 @@ func (executor *CLIExecutor) wasStopped(attempt *cliAttempt) bool {
 	return attempt.stopRequested
 }
 
+func (executor *CLIExecutor) beginValidation(attempt *cliAttempt) bool {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	if attempt.stopRequested {
+		return false
+	}
+	attempt.result.State = CLIStateValidating
+	return true
+}
+
 func (executor *CLIExecutor) attemptLog(attemptID string) (*videoLogBuffer, error) {
 	executor.mu.RLock()
 	defer executor.mu.RUnlock()
@@ -408,24 +401,64 @@ func activeCLIState(state CLIRunState) bool {
 	return state == CLIStatePreparing || state == CLIStateRunning || state == CLIStateStopping
 }
 
+const maxCLIOutputBytes = int64(^uint64(0) >> 1)
+
 func terminateCLIGroup(pid int, grace time.Duration, waited <-chan error) error {
 	termErr := signalCLIProcessGroup(pid, syscall.SIGTERM)
 	if errors.Is(termErr, syscall.ESRCH) {
 		termErr = nil
 	}
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	select {
-	case <-waited:
-		return termErr
-	case <-timer.C:
-	}
-	killErr := signalCLIProcessGroup(pid, syscall.SIGKILL)
-	if errors.Is(killErr, syscall.ESRCH) {
-		killErr = nil
-	}
+	killErr := waitForCLIGroupExit(pid, grace)
 	<-waited
 	return errors.Join(termErr, killErr)
+}
+
+func stopCLIProcessGroup(ctx context.Context, pid int, grace time.Duration) error {
+	termErr := signalCLIProcessGroup(pid, syscall.SIGTERM)
+	if errors.Is(termErr, syscall.ESRCH) {
+		termErr = nil
+	}
+	if ctx.Err() != nil {
+		killErr := signalCLIProcessGroup(pid, syscall.SIGKILL)
+		if errors.Is(killErr, syscall.ESRCH) {
+			killErr = nil
+		}
+		return errors.Join(ctx.Err(), termErr, waitForCLIGroupExit(pid, 0), killErr)
+	}
+	return errors.Join(termErr, waitForCLIGroupExit(pid, grace))
+}
+
+// waitForCLIGroupExit always confirms group disappearance. A zero grace
+// means KILL immediately; otherwise it grants TERM the requested interval.
+func waitForCLIGroupExit(pid int, grace time.Duration) error {
+	if pid <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(grace)
+	killed := grace == 0
+	if killed {
+		if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return err
+		}
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		err := signalCLIProcessGroup(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !killed && !time.Now().Before(deadline) {
+			killed = true
+			if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				return err
+			}
+		}
+		<-ticker.C
+	}
 }
 
 func signalCLIProcessGroup(pid int, signal syscall.Signal) error {
@@ -507,13 +540,6 @@ func validateCLIOutput(request CLIRunRequest) (int64, error) {
 	if !pathWithin(resolvedOutputDir, resolvedOutputParent, true) {
 		return 0, fmt.Errorf("video CLI output path must remain inside resolved outputs")
 	}
-	info, err := os.Lstat(outputPath)
-	if err != nil {
-		return 0, fmt.Errorf("inspect video CLI output: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return 0, fmt.Errorf("video CLI output must be a regular non-symlink file")
-	}
 	if !strings.EqualFold(filepath.Ext(outputPath), request.OutputExtension) {
 		return 0, fmt.Errorf("video CLI output extension does not match its declaration")
 	}
@@ -525,11 +551,25 @@ func validateCLIOutput(request CLIRunRequest) (int64, error) {
 	if wantExtension == "" || !strings.EqualFold(request.OutputExtension, wantExtension) {
 		return 0, fmt.Errorf("video CLI output MIME and extension do not match")
 	}
-	file, err := os.Open(outputPath)
+
+	// Resolve intentional internal links once, then open that resolved path
+	// relative to an already-open workspace fd. Every component is opened
+	// O_NOFOLLOW, so a concurrent rename/symlink swap cannot redirect bytes
+	// outside the workspace between containment validation and reading.
+	resolvedOutputPath := filepath.Join(resolvedOutputParent, filepath.Base(outputPath))
+	relativeOutputPath, err := filepath.Rel(resolvedWorkspaceRoot, resolvedOutputPath)
+	if err != nil || filepath.IsAbs(relativeOutputPath) || relativeOutputPath == "." || strings.HasPrefix(relativeOutputPath, ".."+string(filepath.Separator)) || relativeOutputPath == ".." {
+		return 0, fmt.Errorf("resolve video CLI output path within workspace")
+	}
+	file, err := openCLIOutputNoFollow(resolvedWorkspaceRoot, relativeOutputPath)
 	if err != nil {
-		return 0, fmt.Errorf("open video CLI output: %w", err)
+		return 0, err
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("video CLI output must be a regular non-symlink file")
+	}
 	limited := &io.LimitedReader{R: file, N: request.MaxOutputBytes + 1}
 	header := make([]byte, 12)
 	read, readErr := io.ReadFull(limited, header)
@@ -551,6 +591,52 @@ func validateCLIOutput(request CLIRunRequest) (int64, error) {
 		return 0, fmt.Errorf("video CLI output magic does not match %q", mediaType)
 	}
 	return total, nil
+}
+
+func openCLIOutputNoFollow(workspaceRoot, relativePath string) (*os.File, error) {
+	rootFD, err := syscall.Open(workspaceRoot, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open video CLI workspace safely: %w", err)
+	}
+	fd := rootFD
+	closeFD := true
+	defer func() {
+		if closeFD {
+			_ = syscall.Close(fd)
+		}
+	}()
+	parts := strings.Split(relativePath, string(filepath.Separator))
+	for _, part := range parts[:len(parts)-1] {
+		if part == "" || part == "." || part == ".." {
+			return nil, fmt.Errorf("invalid video CLI output path component")
+		}
+		next, err := syscall.Openat(fd, part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return nil, fmt.Errorf("open video CLI output directory safely: %w", err)
+		}
+		_ = syscall.Close(fd)
+		fd = next
+	}
+	name := parts[len(parts)-1]
+	if name == "" || name == "." || name == ".." {
+		return nil, fmt.Errorf("invalid video CLI output file name")
+	}
+	fileFD, err := syscall.Openat(fd, name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open video CLI output safely: %w", err)
+	}
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fileFD, &stat); err != nil {
+		_ = syscall.Close(fileFD)
+		return nil, fmt.Errorf("stat video CLI output safely: %w", err)
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		_ = syscall.Close(fileFD)
+		return nil, fmt.Errorf("video CLI output must be a regular non-symlink file")
+	}
+	closeFD = false
+	_ = syscall.Close(fd)
+	return os.NewFile(uintptr(fileFD), "video-cli-output"), nil
 }
 
 func pathWithin(root, candidate string, allowEqual bool) bool {
