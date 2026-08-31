@@ -125,7 +125,7 @@ func (handler backendHandler) start(response http.ResponseWriter, request *http.
 	if !handler.decode(response, request, &input, true) {
 		return
 	}
-	run, err := handler.manager.Start(id, input.Variables)
+	run, err := handler.manager.Start(request.Context(), id, input.Variables)
 	if err != nil {
 		handler.writeError(response, err)
 		return

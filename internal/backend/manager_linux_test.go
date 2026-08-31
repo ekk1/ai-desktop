@@ -26,14 +26,14 @@ func TestManagerStartsOneProfileAndCapturesRawOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run, err := manager.Start(profile.ID, map[string]string{"ARG": "override"})
+	run, err := manager.Start(context.Background(), profile.ID, map[string]string{"ARG": "override"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if run.State != StateRunning || run.PID <= 0 || run.ProfileSnapshot.WorkDir != workDir {
 		t.Fatalf("run = %#v", run)
 	}
-	if _, err := manager.Start(profile.ID, nil); !errors.Is(err, ErrRunning) {
+	if _, err := manager.Start(context.Background(), profile.ID, nil); !errors.Is(err, ErrRunning) {
 		t.Fatalf("second Start error = %v", err)
 	}
 	waitForLog(t, manager, profile.ID, "environment:override")
@@ -49,7 +49,7 @@ func TestManagerStartsOneProfileAndCapturesRawOutput(t *testing.T) {
 func TestManagerStopsWholeProcessGroup(t *testing.T) {
 	manager, repository := newTestManager(t)
 	profile := createTestProfile(t, repository, "tree", "sleep 30 & child=$!; printf '%s\\n' \"$child\"; wait")
-	if _, err := manager.Start(profile.ID, nil); err != nil {
+	if _, err := manager.Start(context.Background(), profile.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	log := waitForLog(t, manager, profile.ID, "\n")
@@ -78,7 +78,7 @@ func TestManagerKillsProcessGroupWhenStopContextExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := manager.Start(profile.ID, nil)
+	run, err := manager.Start(context.Background(), profile.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestManagerKillsProcessGroupWhenStopContextExpires(t *testing.T) {
 func TestManagerSavesCrashLogOnlyForUnexpectedFailure(t *testing.T) {
 	manager, repository := newTestManager(t)
 	profile := createTestProfile(t, repository, "crash", "printf 'fatal output'; exit 7")
-	if _, err := manager.Start(profile.ID, nil); err != nil {
+	if _, err := manager.Start(context.Background(), profile.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitForState(t, manager, profile.ID, StateFailed)
@@ -133,7 +133,7 @@ func TestManagerWaitsForLogReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run, err := manager.Start(profile.ID, nil)
+	run, err := manager.Start(context.Background(), profile.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestManagerWaitsForDelayReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run, err := manager.Start(profile.ID, nil)
+	run, err := manager.Start(context.Background(), profile.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestManagerWaitsForHTTPReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := manager.Start(profile.ID, nil); err != nil {
+	if _, err := manager.Start(context.Background(), profile.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitForState(t, manager, profile.ID, StateRunning)
@@ -194,7 +194,7 @@ func TestManagerWaitsForHTTPReadiness(t *testing.T) {
 func TestManagerCanSaveAndClearCurrentLog(t *testing.T) {
 	manager, repository := newTestManager(t)
 	profile := createTestProfile(t, repository, "save", "printf 'save me'; sleep 30")
-	if _, err := manager.Start(profile.ID, nil); err != nil {
+	if _, err := manager.Start(context.Background(), profile.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitForLog(t, manager, profile.ID, "save me")

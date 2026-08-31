@@ -95,7 +95,7 @@ func TestBackendLogEventsSendSnapshotAsSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Start(created.ID, nil); err != nil {
+	if _, err := manager.Start(context.Background(), created.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitForBackendLog(t, manager, created.ID, "snapshot text")

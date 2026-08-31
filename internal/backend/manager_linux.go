@@ -13,16 +13,24 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/ekk1/ai-desktop/internal/worker"
 )
 
 type State string
 
 const (
-	StateStarting State = "starting"
-	StateRunning  State = "running"
-	StateStopping State = "stopping"
-	StateStopped  State = "stopped"
-	StateFailed   State = "failed"
+	StateStarting    State = "starting"
+	StateRunning     State = "running"
+	StateStopping    State = "stopping"
+	StateStopped     State = "stopped"
+	StateFailed      State = "failed"
+	StateInterrupted State = "interrupted"
+)
+
+const (
+	ConnectionConnected = "connected"
+	ConnectionUnknown   = "unknown"
 )
 
 var (
@@ -31,46 +39,80 @@ var (
 )
 
 type RunInfo struct {
-	RunID           string     `json:"run_id"`
-	ProfileID       string     `json:"profile_id"`
-	ProfileName     string     `json:"profile_name"`
-	State           State      `json:"state"`
-	PID             int        `json:"pid"`
-	StartedAt       time.Time  `json:"started_at"`
-	EndedAt         *time.Time `json:"ended_at,omitempty"`
-	ExitCode        *int       `json:"exit_code,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	ProfileSnapshot Profile    `json:"profile_snapshot"`
+	RunID            string     `json:"run_id"`
+	ProfileID        string     `json:"profile_id"`
+	ProfileName      string     `json:"profile_name"`
+	State            State      `json:"state"`
+	PID              int        `json:"pid"`
+	StartedAt        time.Time  `json:"started_at"`
+	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	ExitCode         *int       `json:"exit_code,omitempty"`
+	Error            string     `json:"error,omitempty"`
+	ProfileSnapshot  Profile    `json:"profile_snapshot"`
+	ExecutionKind    string     `json:"execution_kind"`
+	WorkerInstanceID string     `json:"worker_instance_id,omitempty"`
+	WorkerRunID      string     `json:"worker_run_id,omitempty"`
+	ConnectionState  string     `json:"connection_state,omitempty"`
+	ConnectionError  string     `json:"connection_error,omitempty"`
 }
 
 type managedProcess struct {
-	cmd             *exec.Cmd
-	log             *LogBuffer
-	done            chan struct{}
-	info            RunInfo
-	stopRequested   bool
-	failureReason   string
-	readinessCancel context.CancelFunc
+	cmd              *exec.Cmd
+	log              *LogBuffer
+	done             chan struct{}
+	info             RunInfo
+	stopRequested    bool
+	failureReason    string
+	readinessCancel  context.CancelFunc
+	remote           WorkerClient
+	remoteCancel     context.CancelFunc
+	remoteNextOffset int64
+	remoteOffsetSet  bool
+	doneClosed       bool
 }
+
+type WorkerClient interface {
+	Health(context.Context) (worker.HealthResponse, error)
+	Status(context.Context) (worker.StatusResponse, error)
+	Start(context.Context, worker.StartRequest) (worker.Run, error)
+	Stop(context.Context, string) (worker.Run, error)
+	Logs(context.Context, string) (worker.LogSnapshot, error)
+	SubscribeLogs(context.Context, string) (<-chan worker.LogEvent, <-chan error, error)
+}
+
+type WorkerClientFactory func(baseURL string) WorkerClient
 
 type Manager struct {
-	mu          sync.RWMutex
-	repository  *Repository
-	crashLogDir string
-	runs        map[string]*managedProcess
-	httpClient  *http.Client
+	mu            sync.RWMutex
+	repository    *Repository
+	crashLogDir   string
+	runs          map[string]*managedProcess
+	httpClient    *http.Client
+	workerFactory WorkerClientFactory
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
-func NewManager(repository *Repository, crashLogDir string) *Manager {
+func NewManager(repository *Repository, crashLogDir string, factories ...WorkerClientFactory) *Manager {
+	factory := WorkerClientFactory(func(baseURL string) WorkerClient {
+		return worker.Client{BaseURL: baseURL}
+	})
+	if len(factories) > 0 && factories[0] != nil {
+		factory = factories[0]
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		repository:  repository,
-		crashLogDir: crashLogDir,
-		runs:        make(map[string]*managedProcess),
-		httpClient:  &http.Client{Timeout: time.Second},
+		repository:    repository,
+		crashLogDir:   crashLogDir,
+		runs:          make(map[string]*managedProcess),
+		httpClient:    &http.Client{Timeout: time.Second},
+		workerFactory: factory,
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
-func (manager *Manager) Start(profileID string, overrides map[string]string) (RunInfo, error) {
+func (manager *Manager) Start(ctx context.Context, profileID string, overrides map[string]string) (RunInfo, error) {
 	profile, ok := manager.repository.Get(profileID)
 	if !ok {
 		return RunInfo{}, ErrNotFound
@@ -86,9 +128,15 @@ func (manager *Manager) Start(profileID string, overrides map[string]string) (Ru
 	if err != nil {
 		return RunInfo{}, err
 	}
+	if profile.Execution.Kind == ExecutionWorker {
+		return manager.startRemote(ctx, profile, commandText)
+	}
+	return manager.startLocal(profile, commandText)
+}
 
+func (manager *Manager) startLocal(profile Profile, commandText string) (RunInfo, error) {
 	manager.mu.Lock()
-	if current, exists := manager.runs[profileID]; exists && isActive(current.info.State) {
+	if current, exists := manager.runs[profile.ID]; exists && isActive(current.info.State) {
 		manager.mu.Unlock()
 		return RunInfo{}, ErrRunning
 	}
@@ -127,9 +175,10 @@ func (manager *Manager) Start(profileID string, overrides map[string]string) (Ru
 			PID:             command.Process.Pid,
 			StartedAt:       time.Now().UTC(),
 			ProfileSnapshot: cloneProfile(profile),
+			ExecutionKind:   ExecutionLocal,
 		},
 	}
-	manager.runs[profileID] = process
+	manager.runs[profile.ID] = process
 	initialRun := cloneRunInfo(process.info)
 	manager.mu.Unlock()
 
@@ -149,6 +198,20 @@ func (manager *Manager) Stop(ctx context.Context, profileID string) error {
 	}
 	if !isActive(process.info.State) {
 		manager.mu.Unlock()
+		return nil
+	}
+	if process.remote != nil {
+		process.stopRequested = true
+		process.info.State = StateStopping
+		client := process.remote
+		workerRunID := process.info.WorkerRunID
+		manager.mu.Unlock()
+		remoteRun, err := client.Stop(ctx, workerRunID)
+		if err != nil {
+			manager.markRemoteConnectionError(process, err)
+			return fmt.Errorf("stop remote backend profile %q: %w", process.info.ProfileName, err)
+		}
+		manager.applyRemoteRun(process, remoteRun)
 		return nil
 	}
 	process.stopRequested = true
@@ -202,6 +265,7 @@ func (manager *Manager) waitAfterKill(done <-chan struct{}, prior error) error {
 }
 
 func (manager *Manager) Shutdown(ctx context.Context) error {
+	defer manager.cancel()
 	manager.mu.RLock()
 	ids := make([]string, 0, len(manager.runs))
 	for id, process := range manager.runs {
@@ -272,8 +336,18 @@ func (manager *Manager) SaveLog(profileID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	contents := process.log.Snapshot()
+	if process.remote != nil {
+		logContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		snapshot, snapshotErr := process.remote.Logs(logContext, process.info.WorkerRunID)
+		if snapshotErr != nil {
+			return "", fmt.Errorf("read remote backend log: %w", snapshotErr)
+		}
+		contents = snapshot.Data
+	}
 	path := filepath.Join(manager.crashLogDir, "manual-"+process.info.RunID+".log")
-	if err := writeLogFile(path, process.log.Snapshot()); err != nil {
+	if err := writeLogFile(path, contents); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -322,6 +396,7 @@ func (manager *Manager) wait(process *managedProcess) {
 		process.info.State = StateStopped
 	}
 	close(process.done)
+	process.doneClosed = true
 }
 
 func (manager *Manager) startReadiness(process *managedProcess) {
