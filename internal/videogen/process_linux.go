@@ -222,7 +222,9 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 			attempt.result.State = CLIStateStopping
 		}
 		executor.mu.Unlock()
-		_ = terminateCLIGroup(command.Process.Pid, request.StopGrace, waited)
+		if terminateErr := terminateCLIGroup(command.Process.Pid, request.StopGrace, waited); terminateErr != nil {
+			return -1, errors.Join(ctx.Err(), terminateErr)
+		}
 		return command.ProcessState.ExitCode(), ctx.Err()
 	}
 }
@@ -252,7 +254,9 @@ func (executor *CLIExecutor) Stop(ctx context.Context, attemptID string) error {
 	executor.mu.Unlock()
 
 	stopErr := stopCLIProcessGroup(ctx, pid, grace)
-	<-done
+	if stopErr == nil {
+		<-done
+	}
 	return stopErr
 }
 
@@ -409,6 +413,9 @@ func terminateCLIGroup(pid int, grace time.Duration, waited <-chan error) error 
 		termErr = nil
 	}
 	killErr := waitForCLIGroupExit(pid, grace)
+	if killErr != nil {
+		return errors.Join(termErr, killErr)
+	}
 	<-waited
 	return errors.Join(termErr, killErr)
 }
@@ -435,6 +442,7 @@ func waitForCLIGroupExit(pid int, grace time.Duration) error {
 		return nil
 	}
 	deadline := time.Now().Add(grace)
+	killDeadline := time.Now().Add(time.Second)
 	killed := grace == 0
 	if killed {
 		if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
@@ -456,6 +464,9 @@ func waitForCLIGroupExit(pid int, grace time.Duration) error {
 			if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 				return err
 			}
+		}
+		if killed && !time.Now().Before(killDeadline) {
+			return fmt.Errorf("video CLI process group %d remained after SIGKILL", pid)
 		}
 		<-ticker.C
 	}
