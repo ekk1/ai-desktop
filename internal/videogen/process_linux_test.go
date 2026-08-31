@@ -60,7 +60,9 @@ func TestCLIExecutorTimeoutKillsWholeProcessGroup(t *testing.T) {
 	executor := NewCLIExecutor()
 	request := fixtureCLIRunRequest(t, "", `trap '' TERM; (trap '' TERM; while :; do sleep 1; done) & wait`)
 	request.Timeout = 100 * time.Millisecond
-	request.StopGrace = 30 * time.Millisecond
+	// This exceeds the post-KILL confirmation bound. A bound calculated before
+	// grace would expire before KILL is sent and make Stop return an error.
+	request.StopGrace = 1100 * time.Millisecond
 	completed := runCLIAsync(executor, request)
 	status := waitForCLIProcess(t, executor, request.AttemptID, CLIStateRunning)
 	result := <-completed

@@ -442,9 +442,10 @@ func waitForCLIGroupExit(pid int, grace time.Duration) error {
 		return nil
 	}
 	deadline := time.Now().Add(grace)
-	killDeadline := time.Now().Add(time.Second)
+	var killDeadline time.Time
 	killed := grace == 0
 	if killed {
+		killDeadline = time.Now().Add(time.Second)
 		if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return err
 		}
@@ -461,6 +462,7 @@ func waitForCLIGroupExit(pid int, grace time.Duration) error {
 		}
 		if !killed && !time.Now().Before(deadline) {
 			killed = true
+			killDeadline = time.Now().Add(time.Second)
 			if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 				return err
 			}
