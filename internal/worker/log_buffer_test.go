@@ -46,6 +46,23 @@ func TestLogBufferPublishesChunksWithWriteOffsets(t *testing.T) {
 	}
 }
 
+func TestLogBufferSubscribesAtSnapshotBoundary(t *testing.T) {
+	t.Parallel()
+	buffer := NewLogBuffer(64)
+	_, _ = buffer.Write([]byte("before"))
+	snapshot, chunks, cancel := buffer.SubscribeWithSnapshot()
+	defer cancel()
+	_, _ = buffer.Write([]byte("after"))
+
+	if snapshot.StartOffset != 0 || snapshot.EndOffset != 6 || string(snapshot.Data) != "before" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	chunk := receiveLogChunk(t, chunks)
+	if chunk.Offset != snapshot.EndOffset || string(chunk.Data) != "after" {
+		t.Fatalf("chunk = %#v after snapshot %#v", chunk, snapshot)
+	}
+}
+
 func TestLogBufferDropsSlowSubscriberWithoutBlockingWriter(t *testing.T) {
 	t.Parallel()
 	buffer := NewLogBuffer(64)

@@ -199,8 +199,7 @@ func (manager *Manager) SubscribeLog(runID string) (LogSnapshot, <-chan LogChunk
 	}
 	logBuffer := process.log
 	manager.mu.RUnlock()
-	snapshot := logBuffer.Snapshot()
-	chunks, cancel := logBuffer.Subscribe()
+	snapshot, chunks, cancel := logBuffer.SubscribeWithSnapshot()
 	return snapshot, chunks, cancel, nil
 }
 

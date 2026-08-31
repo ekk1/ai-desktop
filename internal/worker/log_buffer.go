@@ -69,14 +69,34 @@ func (buffer *LogBuffer) Snapshot() LogSnapshot {
 
 func (buffer *LogBuffer) Subscribe() (<-chan LogChunk, func()) {
 	buffer.mu.Lock()
+	id, chunks := buffer.subscribeLocked()
+	buffer.mu.Unlock()
+	return chunks, buffer.cancelSubscription(id)
+}
+
+func (buffer *LogBuffer) SubscribeWithSnapshot() (LogSnapshot, <-chan LogChunk, func()) {
+	buffer.mu.Lock()
+	snapshot := LogSnapshot{
+		StartOffset: buffer.startOffset,
+		EndOffset:   buffer.endOffset,
+		Data:        append([]byte(nil), buffer.bytes...),
+	}
+	id, chunks := buffer.subscribeLocked()
+	buffer.mu.Unlock()
+	return snapshot, chunks, buffer.cancelSubscription(id)
+}
+
+func (buffer *LogBuffer) subscribeLocked() (int, chan LogChunk) {
 	id := buffer.nextID
 	buffer.nextID++
 	chunks := make(chan LogChunk, logSubscriberCapacity)
 	buffer.subscribers[id] = chunks
-	buffer.mu.Unlock()
+	return id, chunks
+}
 
+func (buffer *LogBuffer) cancelSubscription(id int) func() {
 	var once sync.Once
-	cancel := func() {
+	return func() {
 		once.Do(func() {
 			buffer.mu.Lock()
 			if subscriber, exists := buffer.subscribers[id]; exists {
@@ -86,5 +106,4 @@ func (buffer *LogBuffer) Subscribe() (<-chan LogChunk, func()) {
 			buffer.mu.Unlock()
 		})
 	}
-	return chunks, cancel
 }
