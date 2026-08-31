@@ -111,7 +111,7 @@ type Client struct{}
 
 func (Client) Capabilities(ctx context.Context, provider ImageProvider) (Capabilities, error) {
 	var result Capabilities
-	if err := requestJSON(ctx, provider, http.MethodGet, "/sdcpp/v1/capabilities", nil, anyTwoHundred, &result); err != nil {
+	if err := requestJSON(ctx, imageHTTPProvider(provider), http.MethodGet, "/sdcpp/v1/capabilities", nil, anyTwoHundred, &result); err != nil {
 		return Capabilities{}, err
 	}
 	return result, nil
@@ -119,7 +119,7 @@ func (Client) Capabilities(ctx context.Context, provider ImageProvider) (Capabil
 
 func (Client) Submit(ctx context.Context, provider ImageProvider, body []byte) (Submission, error) {
 	var result Submission
-	if err := requestJSON(ctx, provider, http.MethodPost, "/sdcpp/v1/img_gen", body, exactly(http.StatusAccepted), &result); err != nil {
+	if err := requestJSON(ctx, imageHTTPProvider(provider), http.MethodPost, "/sdcpp/v1/img_gen", body, exactly(http.StatusAccepted), &result); err != nil {
 		return Submission{}, err
 	}
 	if result.ID == "" || result.Kind != "img_gen" || !knownJobStatus(result.Status) {
@@ -134,7 +134,7 @@ func (Client) Job(ctx context.Context, provider ImageProvider, jobID string) (Jo
 		return Job{}, err
 	}
 	var result Job
-	if err := requestJSON(ctx, provider, http.MethodGet, path, nil, anyTwoHundred, &result); err != nil {
+	if err := requestJSON(ctx, imageHTTPProvider(provider), http.MethodGet, path, nil, anyTwoHundred, &result); err != nil {
 		return Job{}, err
 	}
 	if err := validateJob(result, jobID); err != nil {
@@ -148,21 +148,43 @@ func (Client) Cancel(ctx context.Context, provider ImageProvider, jobID string) 
 	if err != nil {
 		return err
 	}
-	return requestJSON(ctx, provider, http.MethodPost, path+"/cancel", []byte{}, exactly(http.StatusOK), nil)
+	return requestJSON(ctx, imageHTTPProvider(provider), http.MethodPost, path+"/cancel", []byte{}, exactly(http.StatusOK), nil)
 }
 
 type statusAcceptance func(int) bool
 
+type httpJSONProvider struct {
+	BaseURL               string
+	Headers               map[string]string
+	ConnectTimeoutSeconds int
+	MaxResponseBytes      int64
+	MaxErrorBytes         int64
+	Validate              func() error
+}
+
+func imageHTTPProvider(provider ImageProvider) httpJSONProvider {
+	return httpJSONProvider{
+		BaseURL: provider.BaseURL, Headers: provider.Headers, ConnectTimeoutSeconds: provider.ConnectTimeoutSeconds,
+		MaxResponseBytes: provider.MaxResponseBytes, MaxErrorBytes: 4096,
+		Validate: func() error {
+			if err := (ImageConfig{Providers: []ImageProvider{provider}}).Validate(); err != nil {
+				return fmt.Errorf("image provider: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
 func requestJSON(
 	ctx context.Context,
-	provider ImageProvider,
+	provider httpJSONProvider,
 	method, path string,
 	body []byte,
 	accept statusAcceptance,
 	destination any,
 ) error {
-	if err := (ImageConfig{Providers: []ImageProvider{provider}}).Validate(); err != nil {
-		return fmt.Errorf("image provider: %w", err)
+	if err := provider.Validate(); err != nil {
+		return err
 	}
 	var reader io.Reader
 	if body != nil {
@@ -200,7 +222,7 @@ func requestJSON(
 	}
 	defer response.Body.Close()
 	if !accept(response.StatusCode) {
-		return readHTTPError(response)
+		return readHTTPError(response, provider.MaxErrorBytes)
 	}
 	contents, err := readBounded(response.Body, provider.MaxResponseBytes)
 	if err != nil {
@@ -215,10 +237,10 @@ func requestJSON(
 	return nil
 }
 
-func readHTTPError(response *http.Response) error {
-	contents, _ := io.ReadAll(io.LimitReader(response.Body, 4097))
-	if len(contents) > 4096 {
-		contents = contents[:4096]
+func readHTTPError(response *http.Response, maximum int64) error {
+	contents, _ := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if int64(len(contents)) > maximum {
+		contents = contents[:maximum]
 	}
 	return &HTTPError{StatusCode: response.StatusCode, Body: strings.TrimSpace(string(contents))}
 }
