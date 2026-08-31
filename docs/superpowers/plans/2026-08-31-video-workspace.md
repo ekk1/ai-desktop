@@ -185,6 +185,21 @@ git commit -m "feat: configure video execution presets"
 - Produces: `OpenRepository(root string) (*Repository,error)` and Batch/Item/Attempt CRUD
 - Consumes: `videoconfig.ExecutionHTTP|ExecutionLocalCLI` and stable preset IDs
 
+```go
+func (r *Repository) CreateBatch(CreateBatchInput) (Batch,error)
+func (r *Repository) List(Filter) []Batch
+func (r *Repository) Get(batchID string) (Batch,bool)
+func (r *Repository) UpdateBatch(batchID string, input UpdateBatchInput) (Batch,error)
+func (r *Repository) DeleteBatch(batchID string) error
+func (r *Repository) CreateItems(batchID string, inputs []CreateItemInput) ([]Item,error)
+func (r *Repository) UpdateItem(batchID,itemID string,input UpdateItemInput) (Item,error)
+func (r *Repository) DeleteItem(batchID,itemID string) error
+func (r *Repository) MoveItem(batchID,itemID string,offset int) (Batch,error)
+func (r *Repository) CreateAttempt(batchID,itemID string,input CreateAttemptInput) (Attempt,error)
+func (r *Repository) UpdateAttempt(batchID,itemID,attemptID string,input UpdateAttemptInput) (Attempt,error)
+func (r *Repository) AttachResult(batchID,itemID,attemptID,assetID string) (Attempt,error)
+```
+
 - [ ] **Step 1: 写失败的 Batch/Item 顺序和 Timing 校验测试**
 
 ```go
@@ -650,7 +665,7 @@ git commit -m "feat: execute local video cli jobs"
 - Create: `internal/videogen/manager_test.go`
 
 **Interfaces:**
-- Consumes: Config snapshot source、Service、HTTPAssembler、VideoRemoteClient、WorkspaceManager、CLIExecutor、Asset Repository
+- Consumes: `*config.Repository`, `*Service`, `*HTTPAssembler`, `VideoRemoteClient`, `*WorkspaceManager`, `*CLIExecutor`, `*asset.Repository`
 - Produces: `NewManager`, `StartBatch`, `StartItem`, `Retry`, `Cancel`, `GetAttempt`, `SubscribeBatch`, `SaveCLILog`, `CleanupWorkspace`, `Shutdown`
 
 ```go
@@ -659,6 +674,16 @@ type VideoRemoteClient interface {
     Job(context.Context,videoconfig.HTTPProvider,string) (sdcpp.VideoJob,error)
     Cancel(context.Context,videoconfig.HTTPProvider,string) error
 }
+func NewManager(*config.Repository,*Service,*HTTPAssembler,VideoRemoteClient,*WorkspaceManager,*CLIExecutor,*asset.Repository) *Manager
+func (m *Manager) StartBatch(batchID string) ([]Attempt,error)
+func (m *Manager) StartItem(batchID,itemID string) (Attempt,error)
+func (m *Manager) Retry(attemptID string) (Attempt,error)
+func (m *Manager) Cancel(attemptID string) error
+func (m *Manager) GetAttempt(attemptID string) (Attempt,bool)
+func (m *Manager) SubscribeBatch(batchID string) (<-chan AttemptEvent,func(),error)
+func (m *Manager) SaveCLILog(attemptID string) (string,error)
+func (m *Manager) CleanupWorkspace(attemptID string) error
+func (m *Manager) Shutdown(context.Context) error
 ```
 
 - [ ] **Step 1: 写失败的预设共享并发和 Item 单活动测试**
@@ -749,6 +774,15 @@ git commit -m "feat: manage video generation attempts"
 **Interfaces:**
 - Produces: `TailExtraction`, `TailExtractor`, `Extract`, `CancelExtraction`, `SubscribeExtraction`, `SaveExtractionLog`
 - Persists: `<data-dir>/videos/tail-extractions.json` Schema 1
+
+```go
+func NewTailExtractor(*config.Repository,*TailRepository,*asset.Repository,*CLIExecutor,workspaceRoot,logRoot string) *TailExtractor
+func (e *TailExtractor) Extract(context.Context,sourceAssetID,presetID string) (TailExtraction,error)
+func (e *TailExtractor) CancelExtraction(context.Context,extractionID string) error
+func (e *TailExtractor) SubscribeExtraction(extractionID string) (TailExtraction,<-chan TailExtraction,func(),error)
+func (e *TailExtractor) SaveExtractionLog(extractionID string) (string,error)
+func (e *TailExtractor) Shutdown(context.Context) error
+```
 
 - [ ] **Step 1: 写失败的提取成功、输入引用和重启中断测试**
 
