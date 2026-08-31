@@ -2,6 +2,7 @@ package sdcpp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -140,6 +141,32 @@ func TestVideoClientBoundsRequestResponseAndErrorBodies(t *testing.T) {
 			t.Fatalf("error = %#v", err)
 		}
 	})
+}
+
+func TestVideoClientEnforcesDecodedVideoByteLimit(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		decodedSize int
+		wantError   bool
+	}{
+		{name: "exact limit", decodedSize: 3},
+		{name: "one byte over", decodedSize: 4, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encodedVideo := base64.StdEncoding.EncodeToString(make([]byte, test.decodedSize))
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(response, `{"id":"job-v","kind":"vid_gen","status":"completed","queue_position":0,"result":{"output_format":"webm","mime_type":"video/webm","fps":16,"frame_count":33,"b64_json":"`+encodedVideo+`"},"error":null}`)
+			}))
+			defer server.Close()
+			provider := testVideoProvider(server.URL)
+			provider.MaxVideoBytes = 3
+
+			_, err := (VideoClient{}).Job(context.Background(), provider, "job-v")
+			if (err != nil) != test.wantError {
+				t.Fatalf("error = %v, wantError = %t", err, test.wantError)
+			}
+		})
+	}
 }
 
 func TestVideoClientRejectsInvalidVideoJobs(t *testing.T) {

@@ -75,7 +75,7 @@ func (VideoClient) Job(ctx context.Context, provider videoconfig.HTTPProvider, j
 	if err := requestJSON(ctx, httpProvider, http.MethodGet, path, nil, exactly(http.StatusOK), &result); err != nil {
 		return VideoJob{}, err
 	}
-	if err := validateVideoJob(result, jobID); err != nil {
+	if err := validateVideoJob(result, jobID, provider.MaxVideoBytes); err != nil {
 		return VideoJob{}, err
 	}
 	return result, nil
@@ -108,7 +108,7 @@ func videoJobResponseLimit(maxVideoBytes int64) int64 {
 	return 4*((maxVideoBytes+2)/3) + (1 << 20)
 }
 
-func validateVideoJob(job VideoJob, expectedID string) error {
+func validateVideoJob(job VideoJob, expectedID string, maxVideoBytes int64) error {
 	if job.ID == "" || job.ID != expectedID {
 		return fmt.Errorf("stable-diffusion.cpp job identity does not match request")
 	}
@@ -123,7 +123,10 @@ func validateVideoJob(job VideoJob, expectedID string) error {
 	}
 	switch job.Status {
 	case "completed":
-		if err := validateVideoJobResult(job.Result); err != nil || job.Error != nil {
+		if err := validateVideoJobResult(job.Result, maxVideoBytes); err != nil {
+			return fmt.Errorf("stable-diffusion.cpp completed video job result is invalid: %w", err)
+		}
+		if job.Error != nil {
 			return fmt.Errorf("stable-diffusion.cpp completed video job result is invalid")
 		}
 	case "failed", "cancelled":
@@ -138,9 +141,16 @@ func validateVideoJob(job VideoJob, expectedID string) error {
 	return nil
 }
 
-func validateVideoJobResult(result *VideoJobResult) error {
-	if result == nil || result.FPS <= 0 || result.FrameCount <= 0 || !validVideoBase64(result.B64JSON) {
+func validateVideoJobResult(result *VideoJobResult, maxVideoBytes int64) error {
+	if result == nil || result.FPS <= 0 || result.FrameCount <= 0 {
 		return errors.New("missing video result")
+	}
+	decodedBytes, valid := decodedVideoBytes(result.B64JSON)
+	if !valid {
+		return errors.New("missing video result")
+	}
+	if decodedBytes > maxVideoBytes {
+		return ErrResponseTooLarge
 	}
 	expectedMIME, known := map[string]string{
 		"webm": "video/webm",
@@ -151,6 +161,20 @@ func validateVideoJobResult(result *VideoJobResult) error {
 		return errors.New("invalid video output format")
 	}
 	return nil
+}
+
+func decodedVideoBytes(value string) (int64, bool) {
+	if !validVideoBase64(value) {
+		return 0, false
+	}
+	decodedBytes := int64(len(value)/4) * 3
+	if value[len(value)-1] == '=' {
+		decodedBytes--
+	}
+	if value[len(value)-2] == '=' {
+		decodedBytes--
+	}
+	return decodedBytes, true
 }
 
 func validVideoBase64(value string) bool {
