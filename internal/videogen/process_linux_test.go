@@ -201,6 +201,19 @@ func TestCLIExecutorResolvesOutputParentsWithinWorkspace(t *testing.T) {
 	}
 }
 
+func TestOpenAbsoluteDirectoryNoFollowRejectsSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(root, "swap")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if fd, err := openAbsoluteDirectoryNoFollow(filepath.Join(link, "child")); err == nil {
+		_ = syscall.Close(fd)
+		t.Fatal("absolute no-follow traversal accepted a symlink ancestor")
+	}
+}
+
 func TestCLIExecutorRejectsOutputDirectoryOutsideWorkspace(t *testing.T) {
 	request := fixtureCLIRunRequest(t, "", `printf '\x1a\x45\xdf\xa3' > "$OUTPUT_PATH"`)
 	request.OutputDir = t.TempDir()

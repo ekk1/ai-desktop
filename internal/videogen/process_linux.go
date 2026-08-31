@@ -86,6 +86,7 @@ type cliAttempt struct {
 	result        CLIRunResult
 	cmd           *exec.Cmd
 	stopRequested bool
+	awaitingMain  bool
 }
 
 type CLIExecutor struct {
@@ -153,8 +154,7 @@ func (executor *CLIExecutor) Run(ctx context.Context, request CLIRunRequest) (CL
 	runContext, cancel := context.WithTimeout(ctx, request.Timeout)
 	defer cancel()
 	if request.PrepareCommand != "" {
-		exitCode, err := executor.runCommand(runContext, attempt, request, request.PrepareCommand, CLIStatePreparing)
-		executor.setExitCode(attempt, exitCode)
+		_, err := executor.runCommand(runContext, attempt, request, request.PrepareCommand, CLIStatePreparing)
 		if executor.wasStopped(attempt) {
 			return executor.finish(attempt, CLIStateStopped, nil, "", 0)
 		}
@@ -168,16 +168,12 @@ func (executor *CLIExecutor) Run(ctx context.Context, request CLIRunRequest) (CL
 	if executor.wasStopped(attempt) {
 		return executor.finish(attempt, CLIStateStopped, nil, "", 0)
 	}
-	exitCode, err := executor.runCommand(runContext, attempt, request, request.Command, CLIStateRunning)
-	executor.setExitCode(attempt, exitCode)
+	_, err := executor.runCommand(runContext, attempt, request, request.Command, CLIStateRunning)
 	if executor.wasStopped(attempt) {
 		return executor.finish(attempt, CLIStateStopped, nil, "", 0)
 	}
 	if err != nil {
 		return executor.finish(attempt, CLIStateFailed, err, "", 0)
-	}
-	if !executor.beginValidation(attempt) {
-		return executor.finish(attempt, CLIStateStopped, nil, "", 0)
 	}
 	outputSize, err := validateCLIOutput(request)
 	if err != nil {
@@ -207,6 +203,7 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 		return -1, fmt.Errorf("start video CLI %s command: %w", state, err)
 	}
 	attempt.cmd = command
+	attempt.awaitingMain = false
 	attempt.result.State = state
 	attempt.result.PID = command.Process.Pid
 	executor.mu.Unlock()
@@ -215,7 +212,9 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 	go func() { waited <- command.Wait() }()
 	select {
 	case err := <-waited:
-		return command.ProcessState.ExitCode(), commandExitError(state, err)
+		exitCode := command.ProcessState.ExitCode()
+		executor.publishCommandCompletion(attempt, exitCode)
+		return exitCode, commandExitError(state, err)
 	case <-ctx.Done():
 		executor.mu.Lock()
 		if attempt.result.State != CLIStateStopping {
@@ -225,7 +224,9 @@ func (executor *CLIExecutor) runCommand(ctx context.Context, attempt *cliAttempt
 		if terminateErr := terminateCLIGroup(command.Process.Pid, request.StopGrace, waited); terminateErr != nil {
 			return -1, errors.Join(ctx.Err(), terminateErr)
 		}
-		return command.ProcessState.ExitCode(), ctx.Err()
+		exitCode := command.ProcessState.ExitCode()
+		executor.publishCommandCompletion(attempt, exitCode)
+		return exitCode, ctx.Err()
 	}
 }
 
@@ -242,7 +243,7 @@ func (executor *CLIExecutor) Stop(ctx context.Context, attemptID string) error {
 	}
 	executor.mu.Lock()
 	attempt, exists := executor.attempts[attemptID]
-	if !exists || !activeCLIState(attempt.result.State) {
+	if !exists || (!activeCLIState(attempt.result.State) && !attempt.awaitingMain) {
 		executor.mu.Unlock()
 		return ErrCLIAttemptNotRunning
 	}
@@ -369,9 +370,15 @@ func (executor *CLIExecutor) finish(attempt *cliAttempt, state CLIRunState, runE
 	return result, runErr
 }
 
-func (executor *CLIExecutor) setExitCode(attempt *cliAttempt, exitCode int) {
+func (executor *CLIExecutor) publishCommandCompletion(attempt *cliAttempt, exitCode int) {
 	executor.mu.Lock()
+	attempt.cmd = nil
+	attempt.result.PID = 0
 	attempt.result.ExitCode = exitCode
+	attempt.awaitingMain = attempt.result.State == CLIStatePreparing
+	if !attempt.stopRequested {
+		attempt.result.State = CLIStateValidating
+	}
 	executor.mu.Unlock()
 }
 
@@ -379,16 +386,6 @@ func (executor *CLIExecutor) wasStopped(attempt *cliAttempt) bool {
 	executor.mu.RLock()
 	defer executor.mu.RUnlock()
 	return attempt.stopRequested
-}
-
-func (executor *CLIExecutor) beginValidation(attempt *cliAttempt) bool {
-	executor.mu.Lock()
-	defer executor.mu.Unlock()
-	if attempt.stopRequested {
-		return false
-	}
-	attempt.result.State = CLIStateValidating
-	return true
 }
 
 func (executor *CLIExecutor) attemptLog(attemptID string) (*videoLogBuffer, error) {
@@ -412,7 +409,7 @@ func terminateCLIGroup(pid int, grace time.Duration, waited <-chan error) error 
 	if errors.Is(termErr, syscall.ESRCH) {
 		termErr = nil
 	}
-	killErr := waitForCLIGroupExit(pid, grace)
+	killErr := waitForCLIGroupExit(context.Background(), pid, grace)
 	if killErr != nil {
 		return errors.Join(termErr, killErr)
 	}
@@ -425,25 +422,22 @@ func stopCLIProcessGroup(ctx context.Context, pid int, grace time.Duration) erro
 	if errors.Is(termErr, syscall.ESRCH) {
 		termErr = nil
 	}
-	if ctx.Err() != nil {
-		killErr := signalCLIProcessGroup(pid, syscall.SIGKILL)
-		if errors.Is(killErr, syscall.ESRCH) {
-			killErr = nil
-		}
-		return errors.Join(ctx.Err(), termErr, waitForCLIGroupExit(pid, 0), killErr)
-	}
-	return errors.Join(termErr, waitForCLIGroupExit(pid, grace))
+	return errors.Join(termErr, waitForCLIGroupExit(ctx, pid, grace))
 }
 
 // waitForCLIGroupExit always confirms group disappearance. A zero grace
 // means KILL immediately; otherwise it grants TERM the requested interval.
-func waitForCLIGroupExit(pid int, grace time.Duration) error {
+func waitForCLIGroupExit(ctx context.Context, pid int, grace time.Duration) error {
 	if pid <= 0 {
+		if ctx != nil {
+			return ctx.Err()
+		}
 		return nil
 	}
 	deadline := time.Now().Add(grace)
 	var killDeadline time.Time
 	killed := grace == 0
+	var contextErr error
 	if killed {
 		killDeadline = time.Now().Add(time.Second)
 		if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
@@ -453,9 +447,17 @@ func waitForCLIGroupExit(pid int, grace time.Duration) error {
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if !killed && ctx != nil && ctx.Err() != nil {
+			contextErr = ctx.Err()
+			killed = true
+			killDeadline = time.Now().Add(time.Second)
+			if err := signalCLIProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				return errors.Join(contextErr, err)
+			}
+		}
 		err := signalCLIProcessGroup(pid, 0)
 		if errors.Is(err, syscall.ESRCH) {
-			return nil
+			return contextErr
 		}
 		if err != nil {
 			return err
@@ -468,7 +470,7 @@ func waitForCLIGroupExit(pid int, grace time.Duration) error {
 			}
 		}
 		if killed && !time.Now().Before(killDeadline) {
-			return fmt.Errorf("video CLI process group %d remained after SIGKILL", pid)
+			return errors.Join(contextErr, fmt.Errorf("video CLI process group %d remained after SIGKILL", pid))
 		}
 		<-ticker.C
 	}
@@ -607,7 +609,7 @@ func validateCLIOutput(request CLIRunRequest) (int64, error) {
 }
 
 func openCLIOutputNoFollow(workspaceRoot, relativePath string) (*os.File, error) {
-	rootFD, err := syscall.Open(workspaceRoot, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	rootFD, err := openAbsoluteDirectoryNoFollow(workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("open video CLI workspace safely: %w", err)
 	}
@@ -650,6 +652,36 @@ func openCLIOutputNoFollow(workspaceRoot, relativePath string) (*os.File, error)
 	closeFD = false
 	_ = syscall.Close(fd)
 	return os.NewFile(uintptr(fileFD), "video-cli-output"), nil
+}
+
+// openAbsoluteDirectoryNoFollow anchors an absolute path at an open fd for
+// `/`, refusing symlinks in every component rather than trusting a mutable
+// absolute pathname between containment checks and descriptor acquisition.
+func openAbsoluteDirectoryNoFollow(path string) (int, error) {
+	if !filepath.IsAbs(path) {
+		return -1, fmt.Errorf("directory path is not absolute")
+	}
+	fd, err := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, err
+	}
+	for _, part := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			_ = syscall.Close(fd)
+			return -1, fmt.Errorf("directory path escapes root")
+		}
+		next, err := syscall.Openat(fd, part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			_ = syscall.Close(fd)
+			return -1, err
+		}
+		_ = syscall.Close(fd)
+		fd = next
+	}
+	return fd, nil
 }
 
 func pathWithin(root, candidate string, allowEqual bool) bool {
