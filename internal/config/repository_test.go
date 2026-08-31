@@ -124,3 +124,32 @@ func TestRepositoryUpdateVideosPersistsDeepCopy(t *testing.T) {
 		t.Fatalf("repository retained alias with value %q", got)
 	}
 }
+
+func TestRepositoryUpdateLLMPreservesNilVideoCollections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	initial := Default()
+	initial.Videos.HTTPProviders = nil
+	initial.Videos.CLIPresets = nil
+	initial.Videos.TailFramePresets = nil
+	if err := Save(path, initial); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := OpenRepository(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := repository.Snapshot().LLM
+	llm.Exa.APIKey = "exa-test"
+	if _, err := repository.UpdateLLM(llm); err != nil {
+		t.Fatal(err)
+	}
+
+	persisted, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Videos.HTTPProviders != nil || persisted.Videos.CLIPresets != nil || persisted.Videos.TailFramePresets != nil {
+		t.Fatalf("unrelated update rewrote nil video collections: %#v", persisted.Videos)
+	}
+}

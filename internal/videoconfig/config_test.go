@@ -58,6 +58,24 @@ func TestConfigCloneDoesNotAliasMutableFields(t *testing.T) {
 	}
 }
 
+func TestConfigClonePreservesNilCollections(t *testing.T) {
+	clone := (Config{}).Clone()
+	if clone.HTTPProviders != nil || clone.CLIPresets != nil || clone.TailFramePresets != nil {
+		t.Fatalf("Clone changed nil collections: %#v", clone)
+	}
+}
+
+func TestConfigClonePreservesNilMaps(t *testing.T) {
+	original := Config{
+		HTTPProviders: []HTTPProvider{{Headers: nil}},
+		CLIPresets:    []CLIPreset{{Env: nil}},
+	}
+	clone := original.Clone()
+	if clone.HTTPProviders[0].Headers != nil || clone.CLIPresets[0].Env != nil {
+		t.Fatalf("Clone changed nil maps: %#v", clone)
+	}
+}
+
 func validCLIPreset() CLIPreset {
 	return CLIPreset{
 		ID: "local-cli", Name: "Local CLI", Enabled: true, ExecutionKind: ExecutionLocalCLI,

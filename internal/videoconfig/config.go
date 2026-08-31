@@ -116,19 +116,25 @@ func (configuration Config) Validate() error {
 
 func (configuration Config) Clone() Config {
 	clone := configuration
-	clone.HTTPProviders = make([]HTTPProvider, len(configuration.HTTPProviders))
-	for index, provider := range configuration.HTTPProviders {
-		clone.HTTPProviders[index] = provider
-		clone.HTTPProviders[index].Headers = cloneStringMap(provider.Headers)
-		clone.HTTPProviders[index].DefaultParams = cloneRawMessage(provider.DefaultParams)
+	if configuration.HTTPProviders != nil {
+		clone.HTTPProviders = make([]HTTPProvider, len(configuration.HTTPProviders))
+		for index, provider := range configuration.HTTPProviders {
+			clone.HTTPProviders[index] = provider
+			clone.HTTPProviders[index].Headers = cloneStringMap(provider.Headers)
+			clone.HTTPProviders[index].DefaultParams = cloneRawMessage(provider.DefaultParams)
+		}
 	}
-	clone.CLIPresets = make([]CLIPreset, len(configuration.CLIPresets))
-	for index, preset := range configuration.CLIPresets {
-		clone.CLIPresets[index] = preset
-		clone.CLIPresets[index].Env = cloneStringMap(preset.Env)
-		clone.CLIPresets[index].DefaultParams = cloneRawMessage(preset.DefaultParams)
+	if configuration.CLIPresets != nil {
+		clone.CLIPresets = make([]CLIPreset, len(configuration.CLIPresets))
+		for index, preset := range configuration.CLIPresets {
+			clone.CLIPresets[index] = preset
+			clone.CLIPresets[index].Env = cloneStringMap(preset.Env)
+			clone.CLIPresets[index].DefaultParams = cloneRawMessage(preset.DefaultParams)
+		}
 	}
-	clone.TailFramePresets = append([]TailFramePreset(nil), configuration.TailFramePresets...)
+	if configuration.TailFramePresets != nil {
+		clone.TailFramePresets = append([]TailFramePreset(nil), configuration.TailFramePresets...)
+	}
 	return clone
 }
 
@@ -425,6 +431,9 @@ func validateJSONObject(contents json.RawMessage) error {
 }
 
 func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
 	clone := make(map[string]string, len(source))
 	for key, value := range source {
 		clone[key] = value
