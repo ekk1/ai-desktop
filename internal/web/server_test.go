@@ -105,6 +105,7 @@ func TestEmbeddedFilesAreServedAtExplicitPaths(t *testing.T) {
 		{path: "/", contentType: "text/html"},
 		{path: "/assets/styles.css", contentType: "text/css"},
 		{path: "/assets/app.js", contentType: "text/javascript"},
+		{path: "/assets/videos.js", contentType: "text/javascript"},
 	}
 
 	for _, test := range tests {
@@ -458,6 +459,77 @@ func TestEmbeddedImageWorkspaceExposesBatchItemAndResultWorkflow(t *testing.T) {
 	for _, marker := range []string{`.image-workspace`, `.image-item-card`, `.image-result-grid`, `.image-asset-reference`} {
 		if !strings.Contains(styles, marker) {
 			t.Errorf("image workspace styles do not contain %s", marker)
+		}
+	}
+}
+
+func TestEmbeddedVideoWorkspace(t *testing.T) {
+	index := getBody(t, "/")
+	for _, id := range []string{
+		`id="video-sidebar-controls"`, `id="video-batch-folder-filter"`, `id="video-batch-new"`, `id="video-batch-list"`,
+		`id="video-workspace"`, `id="video-batch-title"`, `id="video-batch-folder"`, `id="video-execution-kind"`,
+		`id="video-batch-preset"`, `id="video-batch-save"`, `id="video-batch-run"`, `id="video-timing-frames"`,
+		`id="video-timing-duration"`, `id="video-requested-frames"`, `id="video-common-params"`, `id="video-bulk-prompts"`,
+		`id="video-item-list"`, `id="video-item-editor"`, `id="video-item-enabled"`, `id="video-item-init"`,
+		`id="video-item-end"`, `id="video-item-control"`, `id="video-item-cli-assets"`, `id="video-cli-log"`,
+		`id="video-item-up"`, `id="video-item-down"`, `id="video-item-copy"`, `id="video-item-delete"`,
+		`id="video-item-run"`, `id="video-attempt-history"`, `id="video-result-list"`, `id="video-tail-preset"`,
+	} {
+		if !strings.Contains(index, id) {
+			t.Errorf("video workspace does not contain %s", id)
+		}
+	}
+	for _, disclosure := range []string{
+		`<summary>请求快照、Job 与错误</summary>`,
+		`<summary>CLI 日志与工作区路径</summary>`,
+		`<summary>Attempt 历史</summary>`,
+		`<summary>模型限制与高级参数</summary>`,
+	} {
+		if !strings.Contains(index, disclosure) {
+			t.Errorf("video workspace does not progressively disclose %s", disclosure)
+		}
+	}
+	if !strings.Contains(index, `<video data-video-result controls preload="metadata"></video>`) {
+		t.Error("video results do not use a native metadata-preloaded controls element")
+	}
+
+	app := getBody(t, "/assets/app.js")
+	for _, marker := range []string{`import { createVideoWorkspace } from "/assets/videos.js"`, `createVideoWorkspace({`, `videoWorkspaceController.enter()`, `videoWorkspaceController.leave()`} {
+		if !strings.Contains(app, marker) {
+			t.Errorf("app does not wire the video workspace lifecycle: missing %s", marker)
+		}
+	}
+
+	script := getBody(t, "/assets/videos.js")
+	for _, behavior := range []string{
+		`export function createVideoWorkspace`, `/api/v1/videos/batches`, `/items`, `/move`, `/execute`,
+		`/api/v1/videos/attempts/`, `/cancel`, `/logs`, `/logs/save`, `/workspace`,
+		`/api/v1/videos/tail-extractions`, `/events`, `/api/v1/videos/config`,
+		`openAssetPicker`, `mediaPrefix: "image/"`, `/api/v1/assets/`, `/content`, `/state`,
+		`new EventSource`, `.close()`, `start_offset`, `end_offset`, `data_base64`, `atob(`, `clearOffset`,
+		`Math.ceil`, `duration_seconds`, `video_frames`, `actual_frame_count`, `requested_frames`,
+		`function leave()`, `closeBatchEvents();`, `closeAttemptLog();`, `closeTailEvents();`, `clearTimers();`,
+		"video.src = `/api/v1/assets/${encodeURIComponent(result.assetID)}/content`;", `已归档但仍引用`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("video workspace script does not contain %s", behavior)
+		}
+	}
+	if strings.Contains(script, `/logs/clear`) || strings.Contains(script, `/clear-log`) {
+		t.Error("browser-only CLI log clearing must not call a clear endpoint")
+	}
+	if strings.Contains(script, `.src = asset.`) || strings.Contains(script, `workspace_relative_path}/content`) {
+		t.Error("video previews must not use asset or workspace filesystem paths")
+	}
+
+	styles := getBody(t, "/assets/styles.css")
+	for _, marker := range []string{
+		`.video-workspace`, `.video-batch-list`, `.video-item-card`, `.video-result-card`,
+		`@media (max-width: 720px)`, `.video-batch-toolbar`, `.video-item-layout`, `.video-result-card video`,
+		`overflow-x: hidden`, `grid-template-columns: 1fr`, `width: 100%`,
+	} {
+		if !strings.Contains(styles, marker) {
+			t.Errorf("video workspace styles do not contain %s", marker)
 		}
 	}
 }

@@ -64,6 +64,14 @@
             <p class="inline-message" id="image-batch-list-status">正在读取批次…</p>
             <div class="image-batch-list" id="image-batch-list"></div>
           </div>
+          <div id="video-sidebar-controls">
+            <label class="sidebar-filter">文件夹
+              <select id="video-batch-folder-filter"><option value="">全部文件夹</option></select>
+            </label>
+            <button type="button" class="primary-button" id="video-batch-new">新建批次</button>
+            <p class="inline-message" id="video-batch-list-status">正在读取批次…</p>
+            <div class="video-batch-list" id="video-batch-list"></div>
+          </div>
         </div>
       </aside>
 
@@ -211,6 +219,83 @@
             <div class="image-result-grid" id="image-result-grid"></div>
           </section>
         </section>
+
+        <section class="video-workspace" id="video-workspace" hidden>
+          <form class="video-batch-toolbar" id="video-batch-form">
+            <div class="video-batch-fields">
+              <label>标题 <input id="video-batch-title" required maxlength="240" placeholder="自行输入批次标题"></label>
+              <label>文件夹 <input id="video-batch-folder" maxlength="240" placeholder="例如 clips/storyboard"></label>
+              <label>执行类型
+                <select id="video-execution-kind" required><option value="http">HTTP</option><option value="local_cli">Local CLI</option></select>
+              </label>
+              <label>预设 <select id="video-batch-preset" required></select></label>
+              <label>并发 <input id="video-batch-concurrency" type="number" min="1" max="16" required></label>
+            </div>
+            <div class="button-row">
+              <button type="button" class="text-button danger-text" id="video-batch-delete">删除批次</button>
+              <button type="button" class="secondary-button" id="video-batch-capabilities">读取模型限制</button>
+              <button type="submit" class="primary-button" id="video-batch-save">保存批次</button>
+              <button type="button" class="primary-button" id="video-batch-run">运行待执行项</button>
+            </div>
+          </form>
+          <p class="inline-message" id="video-workspace-status" aria-live="polite">选择或新建批次。</p>
+
+          <section class="video-request-panel" aria-labelledby="video-request-heading">
+            <header class="video-section-heading"><div><p class="eyebrow">批次请求</p><h2 id="video-request-heading">Timing 与公共参数</h2></div></header>
+            <div class="video-timing-layout">
+              <fieldset class="video-timing-mode">
+                <legend>Timing 模式</legend>
+                <label class="checkbox-field"><input id="video-timing-frames" name="video-timing-mode" type="radio" value="frames" checked> 指定帧数</label>
+                <label class="checkbox-field"><input id="video-timing-duration" name="video-timing-mode" type="radio" value="duration"> 指定时长</label>
+              </fieldset>
+              <label data-video-timing-field="frames">请求帧数 <input id="video-frame-count" type="number" min="1" max="100000" value="49"></label>
+              <label data-video-timing-field="duration" hidden>时长（秒） <input id="video-duration-seconds" type="number" min="0.001" max="86400" step="0.001" value="4"></label>
+              <label>FPS <input id="video-fps" type="number" min="1" max="240" value="12"></label>
+              <output id="video-requested-frames">请求 49 帧；实际帧数由结果决定。</output>
+            </div>
+            <details class="video-common-details">
+              <summary>公共 JSON 参数</summary>
+              <label>JSON Object <textarea id="video-common-params" rows="12" spellcheck="false">{}</textarea></label>
+              <p class="form-error" id="video-common-params-error" role="alert"></p>
+            </details>
+            <details>
+              <summary>模型限制与高级参数</summary>
+              <pre id="video-model-limits">HTTP Provider 可读取 capabilities；CLI 使用保存的本地预设。</pre>
+            </details>
+          </section>
+
+          <section class="video-item-section" aria-labelledby="video-items-title">
+            <header class="video-section-heading">
+              <div><p class="eyebrow">Prompt 队列</p><h2 id="video-items-title">请求项</h2></div>
+              <div class="button-row">
+                <button type="button" class="secondary-button" id="video-item-add">新增一项</button>
+                <button type="button" class="secondary-button" id="video-bulk-open">批量添加</button>
+              </div>
+            </header>
+            <div class="video-item-list" id="video-item-list"></div>
+          </section>
+
+          <section class="video-results-section" aria-labelledby="video-results-title">
+            <header class="video-section-heading">
+              <div><p class="eyebrow">共享 Asset</p><h2 id="video-results-title">视频结果与尾帧</h2></div>
+              <label>尾帧预设 <select id="video-tail-preset"></select></label>
+            </header>
+            <div class="video-result-list" id="video-result-list"></div>
+          </section>
+        </section>
+
+        <template id="video-result-template">
+          <article class="video-result-card">
+            <video data-video-result controls preload="metadata"></video>
+            <div class="video-result-body">
+              <header><strong data-video-result-name></strong><span class="state-pill" data-video-result-state></span></header>
+              <p data-video-result-prompt></p>
+              <p class="video-result-facts" data-video-result-facts></p>
+              <div class="button-row" data-video-result-actions></div>
+              <details><summary>尾帧提取状态与历史</summary><div data-video-tail-status></div><div class="button-row" data-video-tail-actions></div></details>
+            </div>
+          </article>
+        </template>
 
         <section class="backend-workspace" id="backend-workspace" hidden>
           <div class="backend-toolbar">
@@ -831,6 +916,82 @@
         <button type="button" class="secondary-button" id="image-item-cancel">取消任务</button>
         <button type="button" class="secondary-button" id="image-item-retry">重试</button>
         <button type="button" class="primary-button" id="image-item-run">运行</button>
+        <button type="submit" class="primary-button">保存请求项</button>
+      </footer>
+    </form>
+  </dialog>
+  <dialog id="video-batch-editor" class="editor-dialog compact-dialog">
+    <form id="video-batch-create-form">
+      <header class="dialog-heading"><div><p class="eyebrow">视频</p><h2>新建批次</h2></div><button type="button" class="text-button" data-video-workspace-close="video-batch-editor">关闭</button></header>
+      <div class="form-grid">
+        <label>标题 <input id="video-new-batch-title" required maxlength="240" placeholder="自行输入标题"></label>
+        <label>文件夹 <input id="video-new-batch-folder" maxlength="240"></label>
+        <label>执行类型 <select id="video-new-execution-kind"><option value="http">HTTP</option><option value="local_cli">Local CLI</option></select></label>
+        <label>预设 <select id="video-new-batch-preset" required></select></label>
+        <label>并发 <input id="video-new-batch-concurrency" type="number" min="1" max="16" value="1" required></label>
+      </div>
+      <p class="form-error" id="video-new-batch-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-video-workspace-close="video-batch-editor">取消</button><button type="submit" class="primary-button">创建</button></footer>
+    </form>
+  </dialog>
+  <dialog id="video-bulk-editor" class="editor-dialog compact-dialog">
+    <form id="video-bulk-form">
+      <header class="dialog-heading"><div><p class="eyebrow">批量视频请求</p><h2>每行一个 Prompt</h2></div><button type="button" class="text-button" data-video-workspace-close="video-bulk-editor">关闭</button></header>
+      <label>提示词 <textarea id="video-bulk-prompts" rows="16" placeholder="slow camera move...&#10;close-up portrait..."></textarea></label>
+      <p class="form-error" id="video-bulk-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-video-workspace-close="video-bulk-editor">取消</button><button type="submit" class="primary-button">加入批次</button></footer>
+    </form>
+  </dialog>
+  <dialog id="video-item-editor" class="editor-dialog video-item-dialog">
+    <form id="video-item-form">
+      <header class="dialog-heading"><div><p class="eyebrow">单次完整视频请求</p><h2>编辑请求项</h2></div><button type="button" class="text-button" data-video-workspace-close="video-item-editor">关闭</button></header>
+      <input id="video-item-id" type="hidden">
+      <div class="video-item-layout">
+        <label class="full-width">Prompt <textarea id="video-item-prompt" rows="7"></textarea></label>
+        <label class="full-width">Negative Prompt <textarea id="video-item-negative" rows="4"></textarea></label>
+        <label class="checkbox-field"><input id="video-item-enabled" type="checkbox" checked> 启用此项</label>
+      </div>
+      <details>
+        <summary>单项 JSON 参数覆盖</summary>
+        <label>JSON Object <textarea id="video-item-override" rows="10" spellcheck="false">{}</textarea></label>
+      </details>
+      <fieldset class="video-asset-groups">
+        <legend>输入 Assets</legend>
+        <div class="video-asset-group" id="video-item-init" data-video-asset-group="init"><strong>首帧 / Init</strong><div class="video-asset-reference"></div><button type="button" class="secondary-button" data-video-asset-pick="init">选择图片</button></div>
+        <div class="video-asset-group" id="video-item-end" data-video-asset-group="end"><strong>尾帧 / End</strong><div class="video-asset-reference"></div><button type="button" class="secondary-button" data-video-asset-pick="end">选择图片</button></div>
+        <div class="video-asset-group" id="video-item-control" data-video-asset-group="control"><strong>Control Frames</strong><div class="video-asset-reference"></div><button type="button" class="secondary-button" data-video-asset-pick="control">选择图片</button></div>
+        <div class="video-cli-assets" id="video-item-cli-assets">
+          <header><strong>CLI 有序素材与角色</strong><button type="button" class="secondary-button" id="video-cli-assets-pick">选择精选素材</button></header>
+          <div id="video-cli-asset-list"></div>
+        </div>
+      </fieldset>
+      <details>
+        <summary>Attempt 历史</summary>
+        <div id="video-attempt-history"></div>
+      </details>
+      <details>
+        <summary>请求快照、Job 与错误</summary>
+        <pre id="video-attempt-technical">尚未运行。</pre>
+      </details>
+      <details id="video-cli-details">
+        <summary>CLI 日志与工作区路径</summary>
+        <div class="button-row">
+          <button type="button" class="secondary-button" id="video-cli-log-clear">浏览器清屏</button>
+          <button type="button" class="secondary-button" id="video-cli-log-save">手动保存日志</button>
+          <button type="button" class="text-button danger-text" id="video-cli-workspace-cleanup">清理工作区</button>
+        </div>
+        <pre id="video-cli-log"></pre>
+        <p id="video-cli-workspace-path"></p>
+      </details>
+      <p class="form-error" id="video-item-error" role="alert"></p>
+      <footer class="dialog-actions video-item-actions">
+        <button type="button" class="text-button" id="video-item-up">上移</button>
+        <button type="button" class="text-button" id="video-item-down">下移</button>
+        <button type="button" class="secondary-button" id="video-item-copy">复制</button>
+        <button type="button" class="text-button danger-text" id="video-item-delete">删除</button>
+        <button type="button" class="secondary-button" id="video-item-cancel">取消任务</button>
+        <button type="button" class="secondary-button" id="video-item-retry">重试</button>
+        <button type="button" class="primary-button" id="video-item-run">运行</button>
         <button type="submit" class="primary-button">保存请求项</button>
       </footer>
     </form>

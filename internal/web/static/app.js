@@ -3,6 +3,7 @@ import { createLLMWorkspace } from "/assets/llm.js";
 import { createImageConfig } from "/assets/image-config.js";
 import { createVideoConfig } from "/assets/video-config.js";
 import { createImageWorkspace } from "/assets/images.js";
+import { createVideoWorkspace } from "/assets/videos.js";
 
 const modules = {
   llm: {
@@ -60,6 +61,7 @@ const sidebarScrim = document.querySelector(".sidebar-scrim");
 const emptyState = document.querySelector(".empty-state");
 const llmWorkspace = document.querySelector("#llm-workspace");
 const imageWorkspace = document.querySelector("#image-workspace");
+const videoWorkspace = document.querySelector("#video-workspace");
 const backendWorkspace = document.querySelector("#backend-workspace");
 const galleryWorkspace = document.querySelector("#gallery-workspace");
 const knowledgeWorkspace = document.querySelector("#knowledge-workspace");
@@ -69,6 +71,7 @@ const imageConfigWorkspace = createImageConfig({ readAPIError });
 const videoConfigWorkspace = createVideoConfig({ readAPIError });
 const llmWorkspaceController = createLLMWorkspace({ sidebarContent, sidebarSearch: document.querySelector("#sidebar-search"), readAPIError, openAssetPicker });
 const imageWorkspaceController = createImageWorkspace({ sidebarContent, sidebarSearch: document.querySelector("#sidebar-search"), readAPIError, openAssetPicker });
+const videoWorkspaceController = createVideoWorkspace({ openAssetPicker, readAPIError });
 
 const backendUI = {
   list: document.querySelector("#backend-list"),
@@ -141,9 +144,11 @@ function selectModule(name) {
   const showSettings = name === "settings";
   const showLLM = name === "llm";
   const showImages = name === "images";
-  emptyState.hidden = showLLM || showImages || showBackends || showGallery || showKnowledge || showSettings;
+  const showVideo = name === "video";
+  emptyState.hidden = showLLM || showImages || showVideo || showBackends || showGallery || showKnowledge || showSettings;
   llmWorkspace.hidden = !showLLM;
   imageWorkspace.hidden = !showImages;
+  videoWorkspace.hidden = !showVideo;
   backendWorkspace.hidden = !showBackends;
   galleryWorkspace.hidden = !showGallery;
   knowledgeWorkspace.hidden = !showKnowledge;
@@ -168,6 +173,8 @@ function selectModule(name) {
   else llmWorkspaceController.leave();
   if (showImages) imageWorkspaceController.enter();
   else imageWorkspaceController.leave();
+  if (showVideo) videoWorkspaceController.enter();
+  else videoWorkspaceController.leave();
   window.location.hash = name;
   setSidebar(false);
 }
