@@ -41,6 +41,7 @@ func TestConfigRejectsNonCanonicalOrUnsupportedCLIOutputAndManagedDefaults(t *te
 	for _, mutate := range []func(*CLIPreset){
 		func(p *CLIPreset) { p.OutputRelativePath = "outputs/a/../result.webm" },
 		func(p *CLIPreset) { p.OutputMediaType, p.OutputExtension = "video/mp4", ".mp4" },
+		func(p *CLIPreset) { p.OutputMediaType, p.OutputExtension = "image/webp; profile=animated", ".webp" },
 		func(p *CLIPreset) { p.DefaultParams = json.RawMessage(`{"batch_count":2}`) },
 	} {
 		candidate := cfg.Clone()

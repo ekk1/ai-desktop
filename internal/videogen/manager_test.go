@@ -506,6 +506,40 @@ func TestManagerCancelContextStopsBlockedRemoteCancellationPromptly(t *testing.T
 	}
 }
 
+// This fails if a completion path holding the lifecycle mutex can retain a
+// cancelled HTTP handler before the cancellation-specific timeout begins.
+func TestManagerCancelContextDoesNotWaitForLifecycleLockAfterRequestCancellation(t *testing.T) {
+	fixture := newVideoManagerFixture(t, "http", 1)
+	fixture.remote.setJobStatus("generating", 1)
+	batch := fixture.createBatch("one", "http-preset", 1, 1)
+	created, err := fixture.manager.StartItem(batch.ID, batch.Items[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.waitForState(created.ID, AttemptPolling)
+	fixture.manager.mu.RLock()
+	run := fixture.manager.attempts[created.ID]
+	fixture.manager.mu.RUnlock()
+	if run == nil {
+		t.Fatal("run is missing")
+	}
+	run.lifecycle.Lock()
+	defer run.lifecycle.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- fixture.manager.CancelContext(ctx, created.ID) }()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CancelContext error = %v, want context.Canceled", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("CancelContext waited for the lifecycle mutex after request cancellation")
+	}
+}
+
 // This fails if StartBatch silently skips an enabled Item with an active
 // Attempt; the caller must receive the conflict before new work is scheduled.
 func TestManagerRejectsBatchWithActiveEnabledItem(t *testing.T) {

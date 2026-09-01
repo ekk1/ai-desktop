@@ -403,7 +403,7 @@ func validOutputRelativePath(value string) bool {
 
 func validVideoOutputDeclaration(mediaType, extension string) bool {
 	parsed, _, err := mime.ParseMediaType(mediaType)
-	if err != nil {
+	if err != nil || strings.TrimSpace(mediaType) != parsed {
 		return false
 	}
 	switch strings.ToLower(parsed) {

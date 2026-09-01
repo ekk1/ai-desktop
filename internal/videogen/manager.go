@@ -1339,6 +1339,8 @@ func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string)
 	if ctx == nil {
 		return errors.New("video cancellation context is nil")
 	}
+	cancelCtx, cancel := context.WithTimeout(ctx, videoCancellationTimeout)
+	defer cancel()
 	manager.mu.RLock()
 	run := manager.attempts[attemptID]
 	manager.mu.RUnlock()
@@ -1352,7 +1354,9 @@ func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string)
 	if run == nil {
 		return ErrAttemptNotFound
 	}
-	run.lifecycle.Lock()
+	if err := lockVideoLifecycle(cancelCtx, &run.lifecycle); err != nil {
+		return err
+	}
 	defer run.lifecycle.Unlock()
 	current, ok = manager.GetAttempt(attemptID)
 	if !ok {
@@ -1374,8 +1378,6 @@ func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string)
 			_, err := manager.completeAttempt(run, input)
 			return err
 		}
-		cancelCtx, cancel := context.WithTimeout(ctx, videoCancellationTimeout)
-		defer cancel()
 		err := manager.remote.Cancel(cancelCtx, *run.preset.http, current.RemoteJobID)
 		var httpError *sdcpp.HTTPError
 		if errors.As(err, &httpError) && httpError.StatusCode == 409 {
@@ -1399,7 +1401,7 @@ func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string)
 		return updateErr
 	case videoconfig.ExecutionLocalCLI:
 		run.cancel()
-		stopCtx, cancel := context.WithTimeout(ctx, time.Second)
+		stopCtx, cancel := context.WithTimeout(cancelCtx, time.Second)
 		stopErr := manager.cli.Stop(stopCtx, current.ID)
 		cancel()
 		if stopErr != nil && !errors.Is(stopErr, ErrCLIAttemptNotRunning) && !errors.Is(stopErr, ErrCLIAttemptNotFound) {
@@ -1411,6 +1413,23 @@ func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string)
 		return updateErr
 	default:
 		return fmt.Errorf("unsupported video execution kind %q", run.preset.kind)
+	}
+}
+
+// lockVideoLifecycle acquires a run lifecycle mutex without letting a
+// disconnected client wait unboundedly behind completion/import work.
+func lockVideoLifecycle(ctx context.Context, lifecycle *sync.Mutex) error {
+	for {
+		if lifecycle.TryLock() {
+			return nil
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 

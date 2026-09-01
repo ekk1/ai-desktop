@@ -122,6 +122,25 @@ func TestVideoAttemptCancelReleasesRequestScopedRemoteCancellation(t *testing.T)
 	}
 }
 
+func TestVideoBatchAPIReturnsInvalidVideoForExecutionManagedSaveValues(t *testing.T) {
+	fixture := newVideoAttemptFixture(t)
+	defer fixture.manager.Shutdown(context.Background())
+	for _, body := range [][]byte{
+		[]byte(`{"title":"managed","execution_kind":"http","preset_id":"sdcpp-video-local","concurrency":1,"common_params":{"batch_count":2},"timing":{"mode":"frames","video_frames":1,"fps":1}}`),
+		[]byte(`{"title":"timing","execution_kind":"http","preset_id":"sdcpp-video-local","concurrency":1,"common_params":{},"timing":{"mode":"frames","video_frames":100001,"fps":1}}`),
+	} {
+		response := fixture.request(http.MethodPost, "/api/v1/videos/batches", body)
+		var envelope struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil || response.Code != http.StatusBadRequest || envelope.Error.Code != "invalid_video" {
+			t.Fatalf("save invalid status=%d body=%s decode=%v envelope=%#v", response.Code, response.Body.String(), err, envelope)
+		}
+	}
+}
+
 func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	root := t.TempDir()
 	cfg, err := config.OpenRepository(filepath.Join(root, "config.json"))
