@@ -8,12 +8,9 @@ import (
 	"io"
 	"math"
 	"strings"
-)
 
-var managedHTTPParams = map[string]struct{}{
-	"prompt": {}, "negative_prompt": {}, "init_image": {}, "end_image": {},
-	"control_frames": {}, "fps": {}, "video_frames": {}, "batch_count": {},
-}
+	"github.com/ekk1/ai-desktop/internal/videoconfig"
+)
 
 // MergeParams combines provider defaults, batch parameters, and item overrides.
 // Object values are merged recursively; null removes an inherited key.
@@ -93,7 +90,7 @@ func decodeParamsObject(raw json.RawMessage, label string) (map[string]any, erro
 
 func rejectManagedHTTPParams(object map[string]any) error {
 	for key := range object {
-		if _, managed := managedHTTPParams[key]; managed {
+		if videoconfig.IsManagedVideoParam(key) {
 			return fmt.Errorf("%q is managed by the workbench", key)
 		}
 	}

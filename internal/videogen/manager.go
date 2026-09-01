@@ -41,6 +41,8 @@ type VideoRemoteClient interface {
 	Cancel(context.Context, videoconfig.HTTPProvider, string) error
 }
 
+const videoCancellationTimeout = 5 * time.Second
+
 // AttemptEvent is the batch stream payload. Snapshot events are emitted when a
 // client subscribes; state events are emitted after every persisted mutation.
 type AttemptEvent struct {
@@ -873,7 +875,7 @@ func (manager *Manager) bestEffortRemoteCancel(run *videoAttemptRun, jobID strin
 	if jobID == "" || run.preset.http == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.preset.http.ConnectTimeoutSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), videoCancellationTimeout)
 	defer cancel()
 	_ = manager.remote.Cancel(ctx, *run.preset.http, jobID)
 }
@@ -1323,7 +1325,14 @@ func (manager *Manager) publish(batchID string, event AttemptEvent) {
 }
 
 func (manager *Manager) Cancel(attemptID string) error {
-	return manager.cancelWithContext(context.Background(), attemptID)
+	return manager.CancelContext(context.Background(), attemptID)
+}
+
+// CancelContext asks the active executor to cancel attemptID. Its remote
+// request is bounded independently of the provider's ordinary connection and
+// job limits, and it stops promptly when ctx is cancelled.
+func (manager *Manager) CancelContext(ctx context.Context, attemptID string) error {
+	return manager.cancelWithContext(ctx, attemptID)
 }
 
 func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string) error {
@@ -1365,7 +1374,7 @@ func (manager *Manager) cancelWithContext(ctx context.Context, attemptID string)
 			_, err := manager.completeAttempt(run, input)
 			return err
 		}
-		cancelCtx, cancel := context.WithTimeout(ctx, time.Duration(run.preset.http.ConnectTimeoutSeconds)*time.Second)
+		cancelCtx, cancel := context.WithTimeout(ctx, videoCancellationTimeout)
 		defer cancel()
 		err := manager.remote.Cancel(cancelCtx, *run.preset.http, current.RemoteJobID)
 		var httpError *sdcpp.HTTPError

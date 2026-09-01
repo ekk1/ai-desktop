@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -125,8 +126,11 @@ func (h videoAttemptHandler) cancel(w http.ResponseWriter, r *http.Request, id s
 		writeJSON(w, 200, before)
 		return
 	}
-	if err := h.manager.Cancel(id); err != nil {
-		if err == context.DeadlineExceeded {
+	if err := h.manager.CancelContext(r.Context(), id); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
 			writeAPIError(w, 504, "provider_timeout", "video provider cancellation timed out")
 		} else {
 			writeVideoAPIError(w, err)

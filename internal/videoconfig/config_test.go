@@ -2,6 +2,7 @@ package videoconfig
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 )
 
@@ -31,6 +32,48 @@ func TestConfigRejectsEscapingCLIOutputAndUnsafeHeaders(t *testing.T) {
 	cfg.HTTPProviders[0].Headers["X-Test"] = "ok\nInjected: yes"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("header injection accepted")
+	}
+}
+
+func TestConfigRejectsNonCanonicalOrUnsupportedCLIOutputAndManagedDefaults(t *testing.T) {
+	cfg := Default()
+	cfg.CLIPresets = []CLIPreset{validCLIPreset()}
+	for _, mutate := range []func(*CLIPreset){
+		func(p *CLIPreset) { p.OutputRelativePath = "outputs/a/../result.webm" },
+		func(p *CLIPreset) { p.OutputMediaType, p.OutputExtension = "video/mp4", ".mp4" },
+		func(p *CLIPreset) { p.DefaultParams = json.RawMessage(`{"batch_count":2}`) },
+	} {
+		candidate := cfg.Clone()
+		mutate(&candidate.CLIPresets[0])
+		if err := candidate.Validate(); err == nil {
+			t.Fatal("unexecutable CLI preset was accepted")
+		}
+	}
+	cfg = Default()
+	cfg.HTTPProviders[0].DefaultParams = json.RawMessage(`{"video_frames":12}`)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("managed HTTP default persisted")
+	}
+}
+
+func TestConfigAcceptsExecutableCLIOutputDeclarations(t *testing.T) {
+	for _, declaration := range []struct {
+		mediaType string
+		extension string
+	}{
+		{mediaType: "video/webm", extension: ".webm"},
+		{mediaType: "image/webp", extension: ".webp"},
+		{mediaType: "video/x-msvideo", extension: ".avi"},
+		{mediaType: "video/avi", extension: ".avi"},
+	} {
+		cfg := Default()
+		preset := validCLIPreset()
+		preset.OutputMediaType, preset.OutputExtension = declaration.mediaType, declaration.extension
+		preset.OutputRelativePath = "outputs/result" + declaration.extension
+		cfg.CLIPresets = []CLIPreset{preset}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate(%s, %s): %v", declaration.mediaType, declaration.extension, err)
+		}
 	}
 }
 

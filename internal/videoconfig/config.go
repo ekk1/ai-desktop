@@ -223,7 +223,7 @@ func (provider HTTPProvider) validate() error {
 	if provider.MaxConcurrentJobs < 1 || provider.MaxConcurrentJobs > maximumConcurrentJobs {
 		return fmt.Errorf("max concurrent jobs must be between 1 and %d", maximumConcurrentJobs)
 	}
-	if err := validateJSONObject(provider.DefaultParams); err != nil {
+	if err := validateVideoDefaultParams(provider.DefaultParams); err != nil {
 		return fmt.Errorf("default params must be one JSON object: %w", err)
 	}
 	return nil
@@ -262,16 +262,13 @@ func (preset CLIPreset) validate() error {
 	if !validOutputRelativePath(preset.OutputRelativePath) {
 		return fmt.Errorf("output relative path must remain under outputs/")
 	}
-	if _, _, err := mime.ParseMediaType(preset.OutputMediaType); err != nil || strings.TrimSpace(preset.OutputMediaType) == "" {
-		return fmt.Errorf("output media type must be valid")
-	}
-	if !validExtension(preset.OutputExtension) {
-		return fmt.Errorf("output extension must start with a dot")
+	if !validVideoOutputDeclaration(preset.OutputMediaType, preset.OutputExtension) {
+		return fmt.Errorf("output media type and extension must be supported")
 	}
 	if err := validateBytes(preset.MaxOutputBytes, maximumVideoBytes, "max output bytes"); err != nil {
 		return err
 	}
-	if err := validateJSONObject(preset.DefaultParams); err != nil {
+	if err := validateVideoDefaultParams(preset.DefaultParams); err != nil {
 		return fmt.Errorf("default params must be one JSON object: %w", err)
 	}
 	return nil
@@ -401,7 +398,51 @@ func validEnvKey(key string) bool {
 func validOutputRelativePath(value string) bool {
 	cleaned := filepath.Clean(value)
 	prefix := "outputs" + string(filepath.Separator)
-	return value != "" && !filepath.IsAbs(value) && strings.HasPrefix(cleaned, prefix)
+	return value != "" && value == cleaned && !filepath.IsAbs(value) && strings.HasPrefix(cleaned, prefix)
+}
+
+func validVideoOutputDeclaration(mediaType, extension string) bool {
+	parsed, _, err := mime.ParseMediaType(mediaType)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed) {
+	case "video/webm":
+		return extension == ".webm"
+	case "video/x-msvideo", "video/avi":
+		return extension == ".avi"
+	case "image/webp":
+		return extension == ".webp"
+	default:
+		return false
+	}
+}
+
+func validateVideoDefaultParams(contents json.RawMessage) error {
+	if err := validateJSONObject(contents); err != nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(contents, &object); err != nil {
+		return err
+	}
+	for key := range object {
+		if IsManagedVideoParam(key) {
+			return fmt.Errorf("%q is managed by the workbench", key)
+		}
+	}
+	return nil
+}
+
+// IsManagedVideoParam reports whether key is owned by the workbench rather
+// than a provider, batch, item, or preset parameter object.
+func IsManagedVideoParam(key string) bool {
+	switch key {
+	case "prompt", "negative_prompt", "fps", "video_frames", "batch_count", "init_image", "end_image", "control_frames", "selected_assets":
+		return true
+	default:
+		return false
+	}
 }
 
 func validExtension(value string) bool {

@@ -27,11 +27,6 @@ var (
 	ErrInvalidAttemptTransition = errors.New("invalid video attempt state transition")
 )
 
-var managedVideoParams = map[string]struct{}{
-	"prompt": {}, "negative_prompt": {}, "fps": {}, "video_frames": {},
-	"init_image": {}, "end_image": {}, "control_frames": {}, "selected_assets": {},
-}
-
 type Repository struct {
 	mu      sync.RWMutex
 	root    string
@@ -492,7 +487,7 @@ func normalizeParams(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("must be one JSON Object")
 	}
 	for key := range object {
-		if _, managed := managedVideoParams[key]; managed {
+		if videoconfig.IsManagedVideoParam(key) {
 			return nil, fmt.Errorf("%q is managed by the workbench", key)
 		}
 	}
@@ -505,20 +500,8 @@ func normalizeParams(raw json.RawMessage) (json.RawMessage, error) {
 
 func normalizeTiming(input TimingInput) (TimingInput, error) {
 	input.Mode = strings.TrimSpace(input.Mode)
-	if input.FPS < 1 || input.FPS > 240 {
-		return TimingInput{}, fmt.Errorf("FPS must be between 1 and 240")
-	}
-	switch input.Mode {
-	case "duration":
-		if input.DurationSeconds <= 0 || input.VideoFrames != 0 {
-			return TimingInput{}, fmt.Errorf("duration timing requires duration only")
-		}
-	case "frames":
-		if input.VideoFrames < 1 || input.DurationSeconds != 0 {
-			return TimingInput{}, fmt.Errorf("frame timing requires video frames only")
-		}
-	default:
-		return TimingInput{}, fmt.Errorf("timing mode is invalid")
+	if _, err := ResolveTiming(input, nil); err != nil {
+		return TimingInput{}, err
 	}
 	return input, nil
 }

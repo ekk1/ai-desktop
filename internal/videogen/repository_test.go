@@ -59,6 +59,35 @@ func TestRepositoryPersistsOrderedVideoItems(t *testing.T) {
 	}
 }
 
+func TestRepositoryRejectsManagedBatchCountAndExecutionInvalidTimingOnSave(t *testing.T) {
+	repository, err := OpenRepository(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := validBatchInput()
+	input.CommonParams = json.RawMessage(`{"batch_count":2}`)
+	if _, err := repository.CreateBatch(input); err == nil {
+		t.Fatal("managed batch_count persisted")
+	}
+	input = validBatchInput()
+	input.Timing.DurationSeconds = 86401
+	if _, err := repository.CreateBatch(input); err == nil {
+		t.Fatal("execution-invalid duration persisted")
+	}
+	input = validBatchInput()
+	input.Timing = TimingInput{Mode: "frames", VideoFrames: 100001, FPS: 24}
+	if _, err := repository.CreateBatch(input); err == nil {
+		t.Fatal("execution-invalid frame count persisted")
+	}
+	batch, err := repository.CreateBatch(validBatchInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateItems(batch.ID, []CreateItemInput{{Prompt: "item", Enabled: true, ParamsOverride: json.RawMessage(`{"batch_count":2}`)}}); err == nil {
+		t.Fatal("managed item batch_count persisted")
+	}
+}
+
 func TestRepositoryRejectsAmbiguousTiming(t *testing.T) {
 	input := validBatchInput()
 	input.Timing = TimingInput{Mode: "duration", DurationSeconds: 2, FPS: 0, VideoFrames: 33}
@@ -69,7 +98,7 @@ func TestRepositoryRejectsAmbiguousTiming(t *testing.T) {
 
 func TestRepositoryValidatesManagedParamsAndItemAssetsWithoutMutation(t *testing.T) {
 	repository := newRepositoryFixture(t)
-	for _, key := range []string{"prompt", "negative_prompt", "fps", "video_frames", "init_image", "end_image", "control_frames", "selected_assets"} {
+	for _, key := range []string{"prompt", "negative_prompt", "fps", "video_frames", "batch_count", "init_image", "end_image", "control_frames", "selected_assets"} {
 		input := validBatchInput()
 		input.CommonParams = json.RawMessage(`{"` + key + `":"managed"}`)
 		if _, err := repository.CreateBatch(input); err == nil {

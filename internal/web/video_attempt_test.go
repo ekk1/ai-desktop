@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,6 +71,54 @@ func TestVideoAttemptAPIExecutesGetsAndCancels(t *testing.T) {
 	}
 	if cleanup := fixture.request(http.MethodPost, "/api/v1/videos/attempts/"+retried.ID+"/cancel", []byte(`{}`)); cleanup.Code != http.StatusAccepted {
 		t.Fatalf("cancel retry=%d %s", cleanup.Code, cleanup.Body.String())
+	}
+}
+
+func TestVideoAttemptCancelReleasesRequestScopedRemoteCancellation(t *testing.T) {
+	remote := newBlockingVideoCancelRemote()
+	fixture := newVideoAttemptFixtureWithRemote(t, remote)
+	defer fixture.manager.Shutdown(context.Background())
+	batch, err := fixture.service.CreateBatch(videogen.CreateBatchInput{Title: "video", ExecutionKind: videoconfig.ExecutionHTTP, PresetID: "sdcpp-video-local", Concurrency: 1, CommonParams: json.RawMessage(`{}`), Timing: videogen.TimingInput{Mode: "frames", VideoFrames: 1, FPS: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := fixture.service.CreateItems(batch.ID, []videogen.CreateItemInput{{Prompt: "one", Enabled: true, ParamsOverride: json.RawMessage(`{}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := fixture.manager.StartItem(batch.ID, items[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		current, ok := fixture.manager.GetAttempt(attempt.ID)
+		if ok && current.State == videogen.AttemptPolling {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("remote attempt did not reach polling")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/videos/attempts/"+attempt.ID+"/cancel", bytes.NewReader([]byte(`{}`))).WithContext(ctx)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		fixture.handler.ServeHTTP(response, request)
+		close(done)
+	}()
+	select {
+	case <-remote.cancelStarted:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not begin remote cancellation")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("cancel handler remained blocked after its request context ended")
 	}
 }
 
@@ -363,6 +413,29 @@ func (videoRemoteStub) Job(ctx context.Context, _ videoconfig.HTTPProvider, _ st
 }
 func (videoRemoteStub) Cancel(context.Context, videoconfig.HTTPProvider, string) error { return nil }
 
+type blockingVideoCancelRemote struct {
+	cancelStarted chan struct{}
+	cancelOnce    sync.Once
+}
+
+func newBlockingVideoCancelRemote() *blockingVideoCancelRemote {
+	return &blockingVideoCancelRemote{cancelStarted: make(chan struct{})}
+}
+
+func (remote *blockingVideoCancelRemote) Submit(context.Context, videoconfig.HTTPProvider, []byte) (sdcpp.VideoSubmission, error) {
+	return sdcpp.VideoSubmission{ID: "job-blocking-cancel", Kind: "vid_gen", Status: "queued"}, nil
+}
+
+func (remote *blockingVideoCancelRemote) Job(context.Context, videoconfig.HTTPProvider, string) (sdcpp.VideoJob, error) {
+	return sdcpp.VideoJob{ID: "job-blocking-cancel", Status: "generating", QueuePosition: 1}, nil
+}
+
+func (remote *blockingVideoCancelRemote) Cancel(ctx context.Context, _ videoconfig.HTTPProvider, _ string) error {
+	remote.cancelOnce.Do(func() { close(remote.cancelStarted) })
+	<-ctx.Done()
+	return fmt.Errorf("blocked remote cancel: %w", ctx.Err())
+}
+
 type videoAttemptFixture struct {
 	handler  http.Handler
 	service  *videogen.Service
@@ -374,6 +447,10 @@ type videoAttemptFixture struct {
 }
 
 func newVideoAttemptFixture(t *testing.T) videoAttemptFixture {
+	return newVideoAttemptFixtureWithRemote(t, videoRemoteStub{})
+}
+
+func newVideoAttemptFixtureWithRemote(t *testing.T, remote videogen.VideoRemoteClient) videoAttemptFixture {
 	t.Helper()
 	root := t.TempDir()
 	cfg, err := config.OpenRepository(filepath.Join(root, "config.json"))
@@ -390,7 +467,7 @@ func newVideoAttemptFixture(t *testing.T) videoAttemptFixture {
 	}
 	service := videogen.NewService(repo, assets)
 	executor := videogen.NewCLIExecutor()
-	manager := videogen.NewManager(cfg, service, videogen.NewHTTPAssembler(assets), videoRemoteStub{}, videogen.NewWorkspaceManager(filepath.Join(root, "video-workspace"), assets), executor, assets)
+	manager := videogen.NewManager(cfg, service, videogen.NewHTTPAssembler(assets), remote, videogen.NewWorkspaceManager(filepath.Join(root, "video-workspace"), assets), executor, assets)
 	return videoAttemptFixture{
 		handler: NewHandler(Options{DataDir: root, Config: cfg.Snapshot(), ConfigRepository: cfg, AssetRepository: assets, VideoService: service, VideoManager: manager}),
 		service: service, manager: manager, config: cfg, assets: assets, executor: executor, root: root,

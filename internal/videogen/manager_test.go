@@ -479,6 +479,33 @@ func TestManagerRetainsPollingAfterRemoteCancelTransportFailure(t *testing.T) {
 	fixture.waitTerminal([]Attempt{created})
 }
 
+// This fails if cancellation inherits the provider's potentially day-long
+// connection timeout, or loses the caller's cancelled request context.
+func TestManagerCancelContextStopsBlockedRemoteCancellationPromptly(t *testing.T) {
+	fixture := newVideoManagerFixture(t, "http", 1)
+	fixture.remote.setJobStatus("generating", 1)
+	fixture.remote.setCancelDelay(time.Minute)
+	batch := fixture.createBatch("one", "http-preset", 1, 1)
+	created, err := fixture.manager.StartItem(batch.ID, batch.Items[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.waitForState(created.ID, AttemptPolling)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	err = fixture.manager.CancelContext(ctx, created.ID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CancelContext error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("CancelContext blocked for %s after request cancellation", elapsed)
+	}
+	if fixture.remote.cancelCount() != 1 {
+		t.Fatalf("remote cancel count = %d, want 1", fixture.remote.cancelCount())
+	}
+}
+
 // This fails if StartBatch silently skips an enabled Item with an active
 // Attempt; the caller must receive the conflict before new work is scheduled.
 func TestManagerRejectsBatchWithActiveEnabledItem(t *testing.T) {
