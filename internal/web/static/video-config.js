@@ -178,7 +178,7 @@ export function createVideoConfig({ readAPIError }) {
   function defaultsFor(kind) {
     if (kind === "http") return { id: "video-http-new", name: "Video HTTP Provider", base_url: "http://127.0.0.1:1234", headers: {}, connect_timeout_seconds: 10, job_timeout_seconds: 3600, poll_interval_milliseconds: 750, max_request_bytes: 402653184, max_error_bytes: 65536, max_video_bytes: 1073741824, max_input_image_bytes: 268435456, max_concurrent_jobs: 1, enabled: true, default_params: {} };
     if (kind === "cli") return { id: "video-cli-new", name: "Local Video CLI", enabled: true, execution_kind: "local_cli", prepare_command_template: "", command_template: "generate-video --output {{OUTPUT_PATH}}", work_dir: "", env: {}, timeout_seconds: 3600, stop_grace_seconds: 10, log_buffer_bytes: 1048576, output_relative_path: "outputs/result.webm", output_media_type: "video/webm", output_extension: ".webm", max_output_bytes: 1073741824, default_params: {} };
-    return { id: "tail-frame-new", name: "Tail Frame", enabled: true, command_template: "extract-tail --output {{OUTPUT_PATH}}", timeout_seconds: 300, stop_grace_seconds: 10, max_image_bytes: 268435456, output_extension: ".png" };
+    return { id: "tail-frame-new", name: "Tail Frame", enabled: true, command_template: "extract-tail --output {{OUTPUT_IMAGE}}", timeout_seconds: 300, stop_grace_seconds: 10, max_image_bytes: 268435456, output_extension: ".png" };
   }
 
   function json(value) {
