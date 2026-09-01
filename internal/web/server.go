@@ -8,6 +8,8 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/backend"
@@ -42,6 +44,25 @@ type Options struct {
 	VideoManager      *videogen.Manager
 	TailExtractor     *videogen.TailExtractor
 	TailRepository    *videogen.TailRepository
+}
+
+func safeDataLocation(dataDir, location string) (string, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		return "saved", nil
+	}
+	base, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", err
+	}
+	path, err := filepath.Abs(location)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(path))
+	if err != nil || rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("saved location is outside the data directory")
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 type errorEnvelope struct {
@@ -127,11 +148,11 @@ func NewHandler(options Options) http.Handler {
 		mux.HandleFunc("/api/v1/videos/batches/", videoAPI.serve)
 	}
 	if options.VideoManager != nil {
-		attemptAPI := videoAttemptHandler{manager: options.VideoManager, maxBody: options.Config.MaxUploadBytes}
+		attemptAPI := videoAttemptHandler{manager: options.VideoManager, maxBody: options.Config.MaxUploadBytes, dataDir: options.DataDir}
 		mux.HandleFunc("/api/v1/videos/attempts/", attemptAPI.serve)
 	}
 	if options.TailExtractor != nil && options.TailRepository != nil {
-		tailAPI := videoTailHandler{extractor: options.TailExtractor, repository: options.TailRepository, maxBody: options.Config.MaxUploadBytes}
+		tailAPI := videoTailHandler{extractor: options.TailExtractor, repository: options.TailRepository, maxBody: options.Config.MaxUploadBytes, dataDir: options.DataDir}
 		mux.HandleFunc("/api/v1/videos/tail-extractions", tailAPI.serve)
 		mux.HandleFunc("/api/v1/videos/tail-extractions/", tailAPI.serve)
 	}

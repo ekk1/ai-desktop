@@ -102,7 +102,7 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 	videoService := videogen.NewService(videoRepository, assetRepository)
 	cliExecutor := videogen.NewCLIExecutor()
 	videoManager := videogen.NewManager(configRepository, videoService, videogen.NewHTTPAssembler(assetRepository), sdcpp.VideoClient{}, videogen.NewWorkspaceManager(workspaceRoot, assetRepository), cliExecutor, assetRepository)
-	tailExtractor := videogen.NewTailExtractor(configRepository, tailRepository, assetRepository, cliExecutor, filepath.Join(dataDir, "videos", "tail-workspaces"), filepath.Join(dataDir, "videos", "tail-logs"))
+	tailExtractor := videogen.NewTailExtractor(configRepository, tailRepository, assetRepository, cliExecutor, workspaceRoot, filepath.Join(dataDir, "videos", "tail-logs"))
 	knowledgeRepository, err := knowledge.OpenRepository(filepath.Join(dataDir, "knowledge", "notes.json"))
 	if err != nil {
 		return nil, fmt.Errorf("open knowledge repository: %w", err)

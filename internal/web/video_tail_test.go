@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,5 +33,28 @@ func TestVideoTailGETUsesTailRepository(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/videos/tail-extractions/"+strings.Repeat("a", 32), nil))
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("GET status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestVideoTailMissingSourceAssetMapsToNotFound(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := config.OpenRepository(filepath.Join(root, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := asset.OpenRepository(filepath.Join(root, "assets.json"), filepath.Join(root, "files"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := videogen.OpenTailRepository(filepath.Join(root, "videos", "tail-extractions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	extractor := videogen.NewTailExtractor(cfg, repo, assets, videogen.NewCLIExecutor(), filepath.Join(root, "workspaces"), filepath.Join(root, "logs"))
+	handler := NewHandler(Options{Config: cfg.Snapshot(), ConfigRepository: cfg, AssetRepository: assets, TailExtractor: extractor, TailRepository: repo})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/videos/tail-extractions", bytes.NewBufferString(`{"source_asset_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","preset_id":"missing"}`)))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("POST status=%d body=%s", response.Code, response.Body.String())
 	}
 }

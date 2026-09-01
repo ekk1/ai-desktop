@@ -16,6 +16,7 @@ type videoAttemptHandler struct {
 	manager   *videogen.Manager
 	maxBody   int64
 	heartbeat time.Duration
+	dataDir   string
 }
 
 func (h videoAttemptHandler) serve(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +203,12 @@ func (h videoAttemptHandler) logs(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	flush.Flush()
+	interval := h.heartbeat
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	heartbeat := time.NewTicker(interval)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case c, ok := <-ch:
@@ -209,6 +216,11 @@ func (h videoAttemptHandler) logs(w http.ResponseWriter, r *http.Request, id str
 				return
 			}
 			if writeVideoLogChunk(w, c.Offset, c.Data) != nil {
+				return
+			}
+			flush.Flush()
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
 				return
 			}
 			flush.Flush()
@@ -231,9 +243,14 @@ func (h videoAttemptHandler) saveLog(w http.ResponseWriter, r *http.Request, id 
 		writeVideoAPIError(w, err)
 		return
 	}
+	location, err := safeDataLocation(h.dataDir, path)
+	if err != nil {
+		writeAPIError(w, 500, "storage_error", "video log could not be saved safely")
+		return
+	}
 	writeJSON(w, 200, struct {
 		WorkspacePath string `json:"workspace_path"`
-	}{path})
+	}{location})
 }
 func (h videoAttemptHandler) cleanup(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodDelete {

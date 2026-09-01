@@ -20,6 +20,7 @@ import (
 
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
+	"github.com/ekk1/ai-desktop/internal/videogen"
 )
 
 func TestNewServerAlwaysUsesLoopbackAddress(t *testing.T) {
@@ -62,6 +63,85 @@ func TestApplicationOpensVideoPersistencePaths(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("video path %q: %v", path, err)
 		}
+	}
+}
+
+func TestApplicationReopenInterruptsVideoAttemptAfterRemoteCancelConflict(t *testing.T) {
+	pollStarted := make(chan struct{})
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/sdcpp/v1/vid_gen":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(w, `{"id":"video-app","kind":"vid_gen","status":"queued"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/sdcpp/v1/jobs/video-app":
+			select {
+			case <-pollStarted:
+			default:
+				close(pollStarted)
+			}
+			<-r.Context().Done()
+		case r.Method == http.MethodPost && r.URL.Path == "/sdcpp/v1/jobs/video-app/cancel":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer provider.Close()
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Videos.HTTPProviders[0].BaseURL = provider.URL
+	runtime, err := newRuntime(dataDir, cfg, "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches", bytes.NewBufferString(`{"title":"video","execution_kind":"http","preset_id":"sdcpp-video-local","concurrency":1,"common_params":{},"timing":{"mode":"frames","video_frames":1,"fps":1}}`)))
+	var batch struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&batch); err != nil || create.Code != http.StatusCreated {
+		t.Fatalf("batch=%d %s %v", create.Code, create.Body.String(), err)
+	}
+	items := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(items, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches/"+batch.ID+"/items", bytes.NewBufferString(`{"items":[{"prompt":"one","enabled":true,"params_override":{}}]}`)))
+	var added struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(items.Body).Decode(&added); err != nil || items.Code != http.StatusCreated || len(added.Items) != 1 {
+		t.Fatalf("items=%d %s %v", items.Code, items.Body.String(), err)
+	}
+	execute := httptest.NewRecorder()
+	runtime.server.Handler.ServeHTTP(execute, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches/"+batch.ID+"/items/"+added.Items[0].ID+"/execute", bytes.NewBufferString(`{}`)))
+	var accepted struct {
+		Attempts []struct {
+			ID string `json:"id"`
+		} `json:"attempts"`
+	}
+	if err := json.NewDecoder(execute.Body).Decode(&accepted); err != nil || execute.Code != http.StatusAccepted || len(accepted.Attempts) != 1 {
+		t.Fatalf("execute=%d %s %v", execute.Code, execute.Body.String(), err)
+	}
+	select {
+	case <-pollStarted:
+	case <-time.After(time.Second):
+		t.Fatal("video polling did not start")
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = runtime.shutdownManagers(shutdownContext)
+	reopened, err := newRuntime(dataDir, cfg, "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.shutdownManagers(context.Background())
+	get := httptest.NewRecorder()
+	reopened.server.Handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/videos/attempts/"+accepted.Attempts[0].ID, nil))
+	var attempt videogen.Attempt
+	if err := json.NewDecoder(get.Body).Decode(&attempt); err != nil || get.Code != http.StatusOK || attempt.State != videogen.AttemptInterrupted {
+		t.Fatalf("attempt=%#v status=%d err=%v", attempt, get.Code, err)
 	}
 }
 

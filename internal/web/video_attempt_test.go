@@ -1,13 +1,16 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/config"
@@ -40,6 +43,60 @@ func TestVideoAttemptAPIExecutesGetsAndCancels(t *testing.T) {
 	}
 	if got := fixture.request(http.MethodPost, "/api/v1/videos/attempts/"+id+"/cancel", []byte(`{}`)); got.Code != http.StatusAccepted {
 		t.Fatalf("cancel=%d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := config.OpenRepository(filepath.Join(root, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	videos := videoconfig.Config{CLIPresets: []videoconfig.CLIPreset{{ID: "local-cli", Name: "Local", Enabled: true, ExecutionKind: videoconfig.ExecutionLocalCLI, CommandTemplate: "printf cli-log; sleep 1; printf '\\x1a\\x45\\xdf\\xa3' > {{OUTPUT_PATH}}", WorkDir: "/tmp", Env: map[string]string{}, TimeoutSeconds: 2, StopGraceSeconds: 0, LogBufferBytes: 1024, OutputRelativePath: "outputs/result.webm", OutputMediaType: "video/webm", OutputExtension: ".webm", MaxOutputBytes: 1024, DefaultParams: json.RawMessage(`{}`)}}}
+	if _, err := cfg.UpdateVideos(videos); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := asset.OpenRepository(filepath.Join(root, "assets.json"), filepath.Join(root, "files"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := videogen.OpenRepository(filepath.Join(root, "batches"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := videogen.NewService(repo, assets)
+	manager := videogen.NewManager(cfg, service, videogen.NewHTTPAssembler(assets), videoRemoteStub{}, videogen.NewWorkspaceManager(filepath.Join(root, "workspace"), assets), videogen.NewCLIExecutor(), assets)
+	defer manager.Shutdown(context.Background())
+	batch, err := service.CreateBatch(videogen.CreateBatchInput{Title: "cli", ExecutionKind: videoconfig.ExecutionLocalCLI, PresetID: "local-cli", Concurrency: 1, CommonParams: json.RawMessage(`{}`), Timing: videogen.TimingInput{Mode: "frames", VideoFrames: 1, FPS: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := service.CreateItems(batch.ID, []videogen.CreateItemInput{{Prompt: "one", Enabled: true, ParamsOverride: json.RawMessage(`{}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := manager.StartItem(batch.ID, items[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := videoAttemptHandler{manager: manager, heartbeat: 5 * time.Millisecond}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.logs(w, r, attempt.ID) }))
+	defer server.Close()
+	response, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	first, _ := reader.ReadString('\n')
+	data, _ := reader.ReadString('\n')
+	_, _ = reader.ReadString('\n')
+	if first != "event: snapshot\n" || !strings.Contains(data, `"start_offset"`) || !strings.Contains(data, `"data_base64"`) {
+		t.Fatalf("snapshot=%q %q", first, data)
+	}
+	heartbeat, err := reader.ReadString('\n')
+	if err != nil || heartbeat != ": heartbeat\n" {
+		t.Fatalf("heartbeat=%q err=%v", heartbeat, err)
 	}
 }
 

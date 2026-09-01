@@ -55,6 +55,17 @@ func TestVideoCapabilitiesAPIMapsSavedProviderAndMode(t *testing.T) {
 	}
 }
 
+func TestSafeDataLocationRedactsAbsolutePathsAndRejectsOutside(t *testing.T) {
+	root := t.TempDir()
+	location, err := safeDataLocation(root, filepath.Join(root, "videos", "video-logs", "attempt.log"))
+	if err != nil || location != "videos/video-logs/attempt.log" {
+		t.Fatalf("location=%q err=%v", location, err)
+	}
+	if _, err := safeDataLocation(root, filepath.Join(filepath.Dir(root), "escape.log")); err == nil {
+		t.Fatal("outside location was exposed")
+	}
+}
+
 type videoCapabilitiesStub struct {
 	result sdcpp.Capabilities
 	err    error

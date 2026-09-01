@@ -15,6 +15,7 @@ type videoTailHandler struct {
 	repository *videogen.TailRepository
 	maxBody    int64
 	heartbeat  time.Duration
+	dataDir    string
 }
 
 func (h videoTailHandler) serve(w http.ResponseWriter, r *http.Request) {
@@ -166,9 +167,14 @@ func (h videoTailHandler) saveLog(w http.ResponseWriter, r *http.Request, id str
 		writeVideoAPIError(w, err)
 		return
 	}
+	location, err := safeDataLocation(h.dataDir, path)
+	if err != nil {
+		writeAPIError(w, 500, "storage_error", "tail log could not be saved safely")
+		return
+	}
 	writeJSON(w, 200, struct {
 		WorkspacePath string `json:"workspace_path"`
-	}{path})
+	}{location})
 }
 func writeTailEvent(w http.ResponseWriter, typ string, e videogen.TailExtraction) error {
 	b, err := json.Marshal(e)

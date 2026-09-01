@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
@@ -236,6 +237,7 @@ func (h videoBatchHandler) detail(batch videogen.Batch) videoBatchResponse {
 			assets = append(assets, videoAssetSummary{ID: a.ID, SHA256: a.SHA256, MediaType: a.MediaType, DisplayName: a.DisplayName, Size: a.Size, State: a.State})
 		}
 	}
+	sort.Slice(assets, func(i, j int) bool { return assets[i].ID < assets[j].ID })
 	return videoBatchResponse{Batch: batch, PresetAvailable: available, Assets: assets}
 }
 func writeVideoAPIError(w http.ResponseWriter, err error) {
@@ -244,10 +246,12 @@ func writeVideoAPIError(w http.ResponseWriter, err error) {
 		writeAPIError(w, 504, "provider_timeout", "video provider request timed out")
 	case isVideoUpstreamError(err):
 		writeAPIError(w, 502, "provider_error", "video provider request failed")
-	case errors.Is(err, videogen.ErrBatchNotFound), errors.Is(err, videogen.ErrItemNotFound), errors.Is(err, videogen.ErrAttemptNotFound), errors.Is(err, videogen.ErrTailExtractionNotFound):
+	case errors.Is(err, asset.ErrNotFound), errors.Is(err, videogen.ErrBatchNotFound), errors.Is(err, videogen.ErrItemNotFound), errors.Is(err, videogen.ErrAttemptNotFound), errors.Is(err, videogen.ErrTailExtractionNotFound), errors.Is(err, videogen.ErrVideoAssetNotFound), errors.Is(err, videogen.ErrCLIAttemptNotFound), errors.Is(err, videogen.ErrVideoPresetNotFound):
 		writeAPIError(w, 404, "not_found", err.Error())
-	case errors.Is(err, videogen.ErrActiveAttempt), errors.Is(err, videogen.ErrMoveBoundary):
+	case errors.Is(err, videogen.ErrActiveAttempt):
 		writeAPIError(w, 409, "active_attempt", err.Error())
+	case errors.Is(err, videogen.ErrMoveBoundary):
+		writeAPIError(w, 409, "move_boundary", err.Error())
 	case errors.Is(err, videogen.ErrVideoManagerClosed), errors.Is(err, videogen.ErrTailExtractorClosed):
 		writeAPIError(w, 409, "manager_closed", "video workbench is shutting down")
 	default:
