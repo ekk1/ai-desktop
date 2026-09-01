@@ -628,6 +628,19 @@ func TestEmbeddedVideoWorkspaceReviewFixContracts(t *testing.T) {
 	if loadAt < 0 || commitAt < 0 || loadAt > commitAt || strings.Contains(selection[:commitAt], "selectedBatchID = batchID") {
 		t.Error("Batch selection must load and validate candidate detail before committing its route ID")
 	}
+	editVersionAt := strings.Index(selection, "const editVersion = batchEditVersion")
+	editGuardAt := strings.Index(selection, "batchEditVersion !== editVersion")
+	if editVersionAt < 0 || editGuardAt < 0 || editVersionAt > loadAt || editGuardAt < loadAt || editGuardAt > commitAt {
+		t.Error("Batch selection must capture the draft version before candidate GET and reject edits before commit")
+	} else if !strings.Contains(selection[editGuardAt:commitAt], "请再次点击") || !strings.Contains(selection[editGuardAt:commitAt], "return;") {
+		t.Error("edit-during-selection must preserve the draft and require an explicit second click")
+	}
+
+	enter := section("async function enter()", "function leave()")
+	activeGuardAt, activateAt := strings.Index(enter, "if (active) return;"), strings.Index(enter, "active = true;")
+	if activeGuardAt < 0 || activateAt < 0 || activeGuardAt > activateAt {
+		t.Error("enter must return before any reload or dirty-state mutation when the workspace is already active")
+	}
 }
 
 func TestEmbeddedKnowledgeWorkspaceExposesMemoEditor(t *testing.T) {

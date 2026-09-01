@@ -261,11 +261,16 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       renderWorkspace();
       return;
     }
+    const editVersion = batchEditVersion;
     const version = ++selectionVersion;
     setStatus("正在读取视频批次…");
     try {
       const loaded = await loadBatchDetail(batchID);
       if (!active || version !== selectionVersion) return;
+      if (batchEditVersion !== editVersion) {
+        setStatus("当前批次草稿在读取目标批次期间发生修改；已保留草稿。请再次点击目标批次并确认切换。", true);
+        return;
+      }
       closeBatchEvents();
       closeAttemptLog();
       closeTailEvents();
@@ -1360,6 +1365,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   }
 
   async function enter() {
+    if (active) return;
     active = true;
     const version = ++loadVersion;
     ui.sidebarControls.hidden = false;
