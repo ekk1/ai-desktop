@@ -534,6 +534,102 @@ func TestEmbeddedVideoWorkspace(t *testing.T) {
 	}
 }
 
+func TestEmbeddedVideoWorkspaceReviewFixContracts(t *testing.T) {
+	index := getBody(t, "/")
+	if !strings.Contains(index, `data-video-tail-history`) {
+		t.Error("video result details do not expose ordered tail extraction history")
+	}
+
+	script := getBody(t, "/assets/videos.js")
+	for _, behavior := range []string{
+		`function reconcileSelectedCLIAssets(previous, pickerAssets)`,
+		`function validLogSnapshot(startOffset, endOffset, byteLength)`,
+		`function invalidateLogStream(message)`,
+		`logAwaitingSnapshot`, `scheduleLogReconnect`,
+		`const tailExtractionsBySource = new Map()`,
+		`function upsertTailExtraction(extraction)`,
+		`function renderTailHistory(container, history)`,
+		`function ensureAssetActive(assetID)`,
+		`async function useTailAsNewItem(assetID)`,
+		`async function loadBatchDetail(batchID)`,
+		`function commitBatchSelection(batchID, loaded)`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("video review fix contract is missing %s", behavior)
+		}
+	}
+	if !strings.Contains(script, "ui.cliPath.textContent = \"\";\n    ui.attemptHistory.replaceChildren();") {
+		t.Error("attempt rendering does not clear the previous CLI workspace path first")
+	}
+
+	section := func(start, end string) string {
+		t.Helper()
+		startAt := strings.Index(script, start)
+		if startAt < 0 {
+			t.Fatalf("video review fix section is missing %s", start)
+		}
+		endAt := strings.Index(script[startAt+len(start):], end)
+		if endAt < 0 {
+			t.Fatalf("video review fix section %s has no %s boundary", start, end)
+		}
+		return script[startAt : startAt+len(start)+endAt]
+	}
+
+	reconcile := section("function reconcileSelectedCLIAssets", "async function chooseCLIAssets")
+	for _, marker := range []string{"previous.filter", "pickedIDs.has(item.asset_id)", "pickerAssets.filter", "return [...surviving, ...appended]"} {
+		if !strings.Contains(reconcile, marker) {
+			t.Errorf("CLI Asset reconciliation does not preserve prior order and append new selections: missing %s", marker)
+		}
+	}
+
+	snapshot := section("function receiveLogSnapshot", "function receiveLogChunk")
+	validationAt := strings.Index(snapshot, "if (!validLogSnapshot")
+	mutationAt := strings.Index(snapshot, "logStartOffset = startOffset")
+	if validationAt < 0 || mutationAt < 0 || validationAt > mutationAt || !strings.Contains(snapshot, "invalidateLogStream") || !strings.Contains(snapshot, "return;") {
+		t.Error("log snapshot must be validated and rejected before authoritative offsets are mutated")
+	}
+	chunk := section("function receiveLogChunk", "function connectAttemptLog")
+	for _, marker := range []string{"if (logAwaitingSnapshot) return", "if (startOffset > logEndOffset)", "invalidateLogStream", "return;"} {
+		if !strings.Contains(chunk, marker) {
+			t.Errorf("log chunk gap handling does not wait for a new authoritative snapshot: missing %s", marker)
+		}
+	}
+
+	tailHistory := section("function renderTailHistory", "function renderTailActions")
+	for _, marker := range []string{"[...history].reverse()", "stateText(extraction.state)", "extraction.error?.message", "saveTailLog(extraction.id)"} {
+		if !strings.Contains(tailHistory, marker) {
+			t.Errorf("tail extraction history is incomplete: missing %s", marker)
+		}
+	}
+	tailEvents := section("function connectRelevantTailEvents", "function closeTailEvents")
+	for _, marker := range []string{"latestTailExtraction(sourceAssetID)", "!terminalAttemptStates.has(extraction.state)", "latestTailExtraction(extraction.source_asset_id)?.id !== extraction.id"} {
+		if !strings.Contains(tailEvents, marker) {
+			t.Errorf("tail SSE does not limit subscriptions to the newest active extraction: missing %s", marker)
+		}
+	}
+
+	currentTail := section("async function useTailAsCurrentItem", "async function ensureAssetActive")
+	if activateAt, putAt := strings.Index(currentTail, "await ensureAssetActive(assetID)"), strings.Index(currentTail, `jsonOptions("PUT"`); activateAt < 0 || putAt < 0 || activateAt > putAt {
+		t.Error("current-item tail flow does not activate the tail Asset before PUT")
+	}
+	activation := section("async function ensureAssetActive", "async function useTailAsNewItem")
+	for _, marker := range []string{"/state`, jsonOptions(\"POST\", { state: \"active\" })", "assetCache.set(asset.id, asset)", "无法先将归档尾帧设为精选"} {
+		if !strings.Contains(activation, marker) {
+			t.Errorf("tail Asset activation is incomplete: missing %s", marker)
+		}
+	}
+	newTail := section("async function useTailAsNewItem", "async function saveTailLog")
+	if activateAt, draftAt := strings.Index(newTail, "await ensureAssetActive(assetID)"), strings.Index(newTail, `openItemEditor("", assetID)`); activateAt < 0 || draftAt < 0 || activateAt > draftAt {
+		t.Error("new-item tail flow does not activate the tail Asset before opening the draft")
+	}
+
+	selection := section("async function selectBatch", "async function refreshDetail")
+	loadAt, commitAt := strings.Index(selection, "await loadBatchDetail(batchID)"), strings.Index(selection, "commitBatchSelection(batchID, loaded)")
+	if loadAt < 0 || commitAt < 0 || loadAt > commitAt || strings.Contains(selection[:commitAt], "selectedBatchID = batchID") {
+		t.Error("Batch selection must load and validate candidate detail before committing its route ID")
+	}
+}
+
 func TestEmbeddedKnowledgeWorkspaceExposesMemoEditor(t *testing.T) {
 	index := getBody(t, "/")
 	for _, id := range []string{

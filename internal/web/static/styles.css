@@ -2068,6 +2068,21 @@ summary {
   border-bottom: 1px solid var(--line);
 }
 
+.video-tail-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.video-tail-history-row span {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 #video-cli-log {
   min-height: 8rem;
   max-height: 24rem;
@@ -2334,7 +2349,8 @@ summary {
   .video-item-card,
   .video-asset-group,
   .video-cli-asset-row,
-  .video-attempt-row {
+  .video-attempt-row,
+  .video-tail-history-row {
     grid-template-columns: 1fr;
   }
 

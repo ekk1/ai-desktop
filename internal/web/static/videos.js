@@ -81,6 +81,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   let loadVersion = 0;
   let batchListVersion = 0;
   let detailVersion = 0;
+  let selectionVersion = 0;
   let configuration = { http_providers: [], cli_presets: [], tail_frame_presets: [] };
   let batches = [];
   let selectedBatchID = "";
@@ -94,7 +95,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   let imageAssetDraft = emptyImageAssets();
   let cliAssetDraft = [];
   const assetCache = new Map();
-  const tailBySourceAsset = new Map();
+  const tailExtractionsBySource = new Map();
   const tailEventSources = new Map();
   const timers = new Set();
 
@@ -104,6 +105,9 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   let logStartOffset = 0;
   let logEndOffset = 0;
   let clearOffset = 0;
+  let logAwaitingSnapshot = false;
+  let logReconnectTimer = null;
+  let logReconnectDelay = 250;
   const logClearOffsets = new Map();
   const logDecoder = new TextDecoder();
 
@@ -215,41 +219,64 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   async function loadBatches(preferredID = selectedBatchID) {
     const version = ++batchListVersion;
     const body = await request("/api/v1/videos/batches");
-    if (version !== batchListVersion) return false;
+    if (version !== batchListVersion) return "";
     batches = body.batches ?? [];
-    if (preferredID && batches.some((batch) => batch.id === preferredID)) selectedBatchID = preferredID;
-    else selectedBatchID = batches[0]?.id ?? "";
     renderFolderFilter();
     renderBatchList();
-    return true;
+    return preferredID && batches.some((batch) => batch.id === preferredID) ? preferredID : (batches[0]?.id ?? "");
+  }
+
+  async function loadBatchDetail(batchID) {
+    const loaded = await request(`/api/v1/videos/batches/${encodeURIComponent(batchID)}`);
+    if (loaded.batch?.id !== batchID) throw new Error("批次详情响应与请求的批次不一致");
+    return loaded;
+  }
+
+  function commitBatchSelection(batchID, loaded) {
+    selectedBatchID = batchID;
+    detail = loaded;
+    detailRefreshPending = false;
+    batchDraftDirty = false;
+    detailVersion += 1;
+    for (const asset of detail.assets ?? []) assetCache.set(asset.id, asset);
+    const summary = batches.find((batch) => batch.id === batchID);
+    if (summary) Object.assign(summary, detail.batch);
+    renderBatchList();
+    renderWorkspace();
   }
 
   async function selectBatch(batchID, { discardDraft = false } = {}) {
+    if (batchID === selectedBatchID && detail?.batch?.id === batchID && !discardDraft) return;
     if (batchID !== selectedBatchID && batchDraftDirty && !discardDraft &&
       !window.confirm("当前批次有未保存修改。切换将放弃这些修改，是否继续？")) return;
-    selectedBatchID = batchID;
-    batchDraftDirty = false;
-    detailRefreshPending = false;
-    renderBatchList();
-    closeBatchEvents();
-    closeAttemptLog();
-    closeTailEvents();
     if (!batchID) {
+      selectionVersion += 1;
+      closeBatchEvents();
+      closeAttemptLog();
+      closeTailEvents();
+      selectedBatchID = "";
       detail = null;
+      batchDraftDirty = false;
+      renderBatchList();
       renderWorkspace();
       return;
     }
+    const version = ++selectionVersion;
     setStatus("正在读取视频批次…");
     try {
-      const loaded = await refreshDetail({ preserveBatchDraft: false });
-      if (!loaded) return;
+      const loaded = await loadBatchDetail(batchID);
+      if (!active || version !== selectionVersion) return;
+      closeBatchEvents();
+      closeAttemptLog();
+      closeTailEvents();
+      commitBatchSelection(batchID, loaded);
       if (active) {
         connectBatchEvents();
         connectRelevantTailEvents();
       }
       setStatus(detail.preset_available ? "所有修改都需要显式保存。" : "当前预设不可用，请在配置中启用或切换。", !detail.preset_available);
     } catch (error) {
-      setStatus(`读取失败：${error.message}`, true);
+      if (active && version === selectionVersion) setStatus(`读取失败；仍保留当前批次与未保存草稿：${error.message}`, true);
     }
   }
 
@@ -257,7 +284,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     if (!selectedBatchID) return false;
     const batchID = selectedBatchID;
     const version = ++detailVersion;
-    const loaded = await request(`/api/v1/videos/batches/${encodeURIComponent(batchID)}`);
+    const loaded = await loadBatchDetail(batchID);
     if (batchID !== selectedBatchID || version !== detailVersion || loaded.batch?.id !== batchID) return false;
     detail = loaded;
     for (const asset of detail.assets ?? []) assetCache.set(asset.id, asset);
@@ -367,8 +394,8 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       closeBatchEvents();
       closeAttemptLog();
       closeTailEvents();
-      await loadBatches();
-      if (selectedBatchID) await selectBatch(selectedBatchID, { discardDraft: true });
+      const nextBatchID = await loadBatches("");
+      if (nextBatchID) await selectBatch(nextBatchID, { discardDraft: true });
       else renderWorkspace();
     } catch (error) { setStatus(`删除失败：${error.message}`, true); }
   }
@@ -408,9 +435,8 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
         preset_id: ui.createPreset.value, concurrency: Number(ui.createConcurrency.value), common_params: {}, timing: clone(defaultTiming),
       }));
       ui.createDialog.close();
-      batchDraftDirty = false;
       await loadBatches(created.id);
-      await selectBatch(created.id, { discardDraft: true });
+      await selectBatch(created.id);
     } catch (error) { ui.createError.textContent = error.message; }
   }
 
@@ -546,6 +572,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   }
 
   function renderAttemptHistory(item) {
+    ui.cliPath.textContent = "";
     ui.attemptHistory.replaceChildren();
     const attempts = item?.attempts ?? [];
     if (!attempts.length) ui.attemptHistory.textContent = "尚未运行。";
@@ -660,16 +687,22 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     renderCLIAssets();
   }
 
+  function reconcileSelectedCLIAssets(previous, pickerAssets) {
+    const pickedIDs = new Set(pickerAssets.map((asset) => asset.id));
+    const previousIDs = new Set(previous.map((item) => item.asset_id));
+    const surviving = previous.filter((item) => assetCache.get(item.asset_id)?.state !== "active" || pickedIDs.has(item.asset_id));
+    const appended = pickerAssets.filter((asset) => !previousIDs.has(asset.id)).map((asset) => ({
+      asset_id: asset.id, role: "", order: 0,
+    }));
+    return [...surviving, ...appended];
+  }
+
   async function chooseCLIAssets() {
     const activeIDs = cliAssetDraft.filter((selected) => assetCache.get(selected.asset_id)?.state === "active").map((selected) => selected.asset_id);
     const selected = await openAssetPicker({ multiple: true, selected: activeIDs });
     if (!selected) return;
     for (const asset of selected) assetCache.set(asset.id, asset);
-    const prior = new Map(cliAssetDraft.map((item) => [item.asset_id, item]));
-    const archived = cliAssetDraft.filter((item) => assetCache.get(item.asset_id)?.state !== "active");
-    cliAssetDraft = [...archived, ...selected.map((asset) => ({
-      asset_id: asset.id, role: prior.get(asset.id)?.role || "", order: 0,
-    }))];
+    cliAssetDraft = reconcileSelectedCLIAssets(cliAssetDraft, selected);
     reindexCLIAssets();
     renderCLIAssets();
   }
@@ -940,27 +973,67 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     ui.cliLog.textContent = logDecoder.decode(logBytes.slice(start));
   }
 
+  function validLogSnapshot(startOffset, endOffset, byteLength) {
+    return Number.isSafeInteger(startOffset) && Number.isSafeInteger(endOffset) && startOffset >= 0 &&
+      endOffset >= startOffset && endOffset - startOffset === byteLength;
+  }
+
+  function scheduleLogReconnect(attemptID) {
+    if (logReconnectTimer !== null) return;
+    const delay = logReconnectDelay;
+    logReconnectDelay = Math.min(logReconnectDelay * 2, 5000);
+    logReconnectTimer = window.setTimeout(() => {
+      const timer = logReconnectTimer;
+      logReconnectTimer = null;
+      timers.delete(timer);
+      if (!active || !ui.itemDialog.open || logAttemptID !== attemptID) return;
+      const latest = latestAttempt(findItem());
+      if (latest?.id === attemptID) connectAttemptLog(latest);
+    }, delay);
+    timers.add(logReconnectTimer);
+  }
+
+  function invalidateLogStream(message) {
+    logAwaitingSnapshot = true;
+    if (logEventSource) logEventSource.close();
+    logEventSource = null;
+    ui.cliPath.textContent = message;
+    if (logAttemptID) scheduleLogReconnect(logAttemptID);
+  }
+
   function receiveLogSnapshot(payload) {
     const bytes = base64Bytes(payload.data_base64);
-    logStartOffset = Number(payload.start_offset);
-    logEndOffset = Number(payload.end_offset);
-    logBytes = bytes;
-    if (logEndOffset - logStartOffset !== bytes.length) {
-      ui.cliPath.textContent = "日志快照的权威 offset 与字节长度不一致；等待事件流重连。";
+    const startOffset = Number(payload.start_offset);
+    const endOffset = Number(payload.end_offset);
+    if (!validLogSnapshot(startOffset, endOffset, bytes.length)) {
+      invalidateLogStream("日志快照 offset 或字节长度无效；已丢弃并重新订阅权威快照。");
+      return;
     }
+    logStartOffset = startOffset;
+    logEndOffset = endOffset;
+    logBytes = bytes;
+    logAwaitingSnapshot = false;
+    logReconnectDelay = 250;
     renderLog();
   }
 
   function receiveLogChunk(payload) {
+    if (logAwaitingSnapshot) return;
     const bytes = base64Bytes(payload.data_base64);
     const startOffset = Number(payload.start_offset);
+    if (!Number.isSafeInteger(startOffset) || startOffset < 0) {
+      invalidateLogStream("CLI 日志 chunk offset 无效；已丢弃并重新订阅权威快照。");
+      return;
+    }
     const chunkEnd = startOffset + bytes.length;
+    if (!Number.isSafeInteger(chunkEnd)) {
+      invalidateLogStream("CLI 日志 chunk 长度超出安全 offset 范围；已丢弃并重新订阅权威快照。");
+      return;
+    }
     if (chunkEnd <= logEndOffset) return;
     if (startOffset > logEndOffset) {
-      logBytes = bytes;
-      logStartOffset = startOffset;
-      logEndOffset = chunkEnd;
-      ui.cliPath.textContent = "CLI 日志出现字节缺口；事件流重连后将用快照对账。";
+      invalidateLogStream("CLI 日志出现字节缺口；已丢弃该 chunk 并重新订阅权威快照。");
+      return;
     } else {
       const overlap = Math.max(0, logEndOffset - startOffset);
       logBytes = appendBytes(logBytes, bytes.slice(overlap));
@@ -976,32 +1049,48 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       return;
     }
     if (logEventSource && logAttemptID === attempt.id) return;
-    closeAttemptLog();
-    logAttemptID = attempt.id;
-    clearOffset = logClearOffsets.get(attempt.id) ?? 0;
+    if (logAttemptID !== attempt.id) {
+      closeAttemptLog();
+      logAttemptID = attempt.id;
+      clearOffset = logClearOffsets.get(attempt.id) ?? 0;
+      logReconnectDelay = 250;
+    }
+    logAwaitingSnapshot = true;
     const source = new EventSource(`/api/v1/videos/attempts/${encodeURIComponent(attempt.id)}/logs`);
     logEventSource = source;
     source.addEventListener("snapshot", (event) => {
       if (logEventSource !== source || logAttemptID !== attempt.id) return;
-      try { receiveLogSnapshot(JSON.parse(event.data)); } catch (error) { ui.cliPath.textContent = `日志快照解析失败：${error.message}`; }
+      try { receiveLogSnapshot(JSON.parse(event.data)); }
+      catch (error) { invalidateLogStream(`日志快照解析失败，已重新订阅：${error.message}`); }
     });
     source.addEventListener("chunk", (event) => {
       if (logEventSource !== source || logAttemptID !== attempt.id) return;
-      try { receiveLogChunk(JSON.parse(event.data)); } catch (error) { ui.cliPath.textContent = `日志字节解析失败：${error.message}`; }
+      try { receiveLogChunk(JSON.parse(event.data)); }
+      catch (error) { invalidateLogStream(`日志字节解析失败，已重新订阅：${error.message}`); }
     });
     source.onerror = () => {
-      if (active && logEventSource === source) ui.cliPath.textContent = "CLI 日志流暂时断开，浏览器会自动重连。";
+      if (active && logEventSource === source) {
+        logAwaitingSnapshot = true;
+        ui.cliPath.textContent = "CLI 日志流暂时断开，浏览器会自动重连并等待权威快照。";
+      }
     };
   }
 
   function closeAttemptLog() {
     if (logEventSource) logEventSource.close();
+    if (logReconnectTimer !== null) {
+      window.clearTimeout(logReconnectTimer);
+      timers.delete(logReconnectTimer);
+      logReconnectTimer = null;
+    }
     logEventSource = null;
     logAttemptID = "";
     logBytes = new Uint8Array();
     logStartOffset = 0;
     logEndOffset = 0;
     clearOffset = 0;
+    logAwaitingSnapshot = false;
+    logReconnectDelay = 250;
     ui.cliLog.textContent = "";
   }
 
@@ -1072,8 +1161,8 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       const actions = card.querySelector("[data-video-result-actions]");
       actions.append(textButton(asset?.state === "active" ? "移入归档" : "设为精选", "text-button",
         () => setAssetState(result.assetID, asset?.state === "active" ? "archive" : "active")));
-      const extraction = tailBySourceAsset.get(result.assetID);
-      renderTailActions(card, result, extraction);
+      const history = tailExtractionsBySource.get(result.assetID) ?? [];
+      renderTailActions(card, result, history);
       ui.resultList.append(card);
     }
   }
@@ -1087,9 +1176,47 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     } catch (error) { setStatus(`更新 Asset 失败：${error.message}`, true); }
   }
 
-  function renderTailActions(card, result, extraction) {
+  function upsertTailExtraction(extraction) {
+    if (!extraction?.id || !extraction.source_asset_id) return [];
+    const history = [...(tailExtractionsBySource.get(extraction.source_asset_id) ?? [])];
+    const index = history.findIndex((candidate) => candidate.id === extraction.id);
+    if (index >= 0) history[index] = extraction;
+    else history.push(extraction);
+    history.sort((left, right) => {
+      const time = new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+      return time || left.id.localeCompare(right.id);
+    });
+    tailExtractionsBySource.set(extraction.source_asset_id, history);
+    return history;
+  }
+
+  function latestTailExtraction(sourceAssetID) {
+    const history = tailExtractionsBySource.get(sourceAssetID) ?? [];
+    return history[history.length - 1] ?? null;
+  }
+
+  function renderTailHistory(container, history) {
+    container.replaceChildren();
+    if (!history.length) {
+      container.textContent = "尚无提取历史。";
+      return;
+    }
+    for (const extraction of [...history].reverse()) {
+      const row = document.createElement("div");
+      row.className = "video-tail-history-row";
+      const summary = document.createElement("span");
+      const error = extraction.error?.message ? ` · ${extraction.error.message}` : "";
+      summary.textContent = `${new Date(extraction.created_at).toLocaleString()} · ${stateText(extraction.state)}${error}`;
+      const save = textButton("保存本次日志", "text-button", () => saveTailLog(extraction.id));
+      row.append(summary, save);
+      container.append(row);
+    }
+  }
+
+  function renderTailActions(card, result, history) {
     const status = card.querySelector("[data-video-tail-status]");
     const actions = card.querySelector("[data-video-tail-actions]");
+    const extraction = history[history.length - 1] ?? null;
     status.textContent = extraction ? `${stateText(extraction.state)}${extraction.error?.message ? `：${extraction.error.message}` : ""}` : "尚未提取尾帧。";
     if (!extraction || terminalAttemptStates.has(extraction.state)) {
       const extract = textButton(extraction ? "重新提取尾帧" : "提取尾帧", "secondary-button", () => startTailExtraction(result.assetID));
@@ -1104,10 +1231,11 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
         textButton(tailAsset?.state === "active" ? "尾帧已精选" : "将尾帧设为精选", "text-button",
           () => setAssetState(extraction.output_asset_id, "active")),
         textButton("作为当前项首帧", "text-button", () => useTailAsCurrentItem(extraction.output_asset_id)),
-        textButton("作为新项首帧", "text-button", () => openItemEditor("", extraction.output_asset_id)),
+        textButton("作为新项首帧", "text-button", () => useTailAsNewItem(extraction.output_asset_id)),
         textButton("保存提取日志", "text-button", () => saveTailLog(extraction.id)),
       );
     }
+    renderTailHistory(card.querySelector("[data-video-tail-history]"), history);
   }
 
   async function startTailExtraction(sourceAssetID) {
@@ -1116,7 +1244,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       const extraction = await request("/api/v1/videos/tail-extractions", jsonOptions("POST", {
         source_asset_id: sourceAssetID, preset_id: ui.tailPreset.value,
       }));
-      tailBySourceAsset.set(sourceAssetID, extraction);
+      upsertTailExtraction(extraction);
       renderResults();
       connectTailEvents(extraction);
       setStatus("尾帧提取已加入队列。");
@@ -1126,27 +1254,39 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   async function cancelTailExtraction(extractionID) {
     try {
       const extraction = await request(`/api/v1/videos/tail-extractions/${encodeURIComponent(extractionID)}/cancel`, jsonOptions("POST"));
-      tailBySourceAsset.set(extraction.source_asset_id, extraction);
+      upsertTailExtraction(extraction);
       renderResults();
     } catch (error) { setStatus(`取消尾帧提取失败：${error.message}`, true); }
   }
 
   function connectRelevantTailEvents() {
     const sourceAssets = new Set(results().map((result) => result.assetID));
-    for (const [sourceAssetID, extraction] of tailBySourceAsset) {
-      if (sourceAssets.has(sourceAssetID) && !terminalAttemptStates.has(extraction.state)) connectTailEvents(extraction);
+    for (const sourceAssetID of sourceAssets) {
+      const extraction = latestTailExtraction(sourceAssetID);
+      if (extraction && !terminalAttemptStates.has(extraction.state)) connectTailEvents(extraction);
     }
   }
 
   function connectTailEvents(extraction) {
-    if (!active || tailEventSources.has(extraction.id)) return;
+    if (!active || latestTailExtraction(extraction.source_asset_id)?.id !== extraction.id ||
+      terminalAttemptStates.has(extraction.state) || tailEventSources.has(extraction.id)) return;
+    for (const previous of tailExtractionsBySource.get(extraction.source_asset_id) ?? []) {
+      if (previous.id === extraction.id) continue;
+      tailEventSources.get(previous.id)?.close();
+      tailEventSources.delete(previous.id);
+    }
     const source = new EventSource(`/api/v1/videos/tail-extractions/${encodeURIComponent(extraction.id)}/events`);
     tailEventSources.set(extraction.id, source);
     const receive = async (event) => {
       if (tailEventSources.get(extraction.id) !== source) return;
       let current;
       try { current = JSON.parse(event.data); } catch (_) { return; }
-      tailBySourceAsset.set(current.source_asset_id, current);
+      upsertTailExtraction(current);
+      if (latestTailExtraction(current.source_asset_id)?.id !== current.id) {
+        source.close();
+        tailEventSources.delete(current.id);
+        return;
+      }
       if (current.state === "succeeded" && current.output_asset_id) {
         try {
           const asset = await request(`/api/v1/assets/${encodeURIComponent(current.output_asset_id)}`);
@@ -1175,12 +1315,41 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     const item = findItem();
     if (!item) { setStatus("请先打开一个现有请求项，再把尾帧写为当前项首帧。", true); return; }
     try {
+      await ensureAssetActive(assetID);
       const updated = await request(`/api/v1/videos/batches/${encodeURIComponent(selectedBatchID)}/items/${encodeURIComponent(item.id)}`,
         jsonOptions("PUT", storedItemPayload(item, { init_image_id: assetID })));
       Object.assign(item, updated);
       await refreshDetail();
       setStatus("尾帧已写入当前请求项的首帧。");
-    } catch (error) { setStatus(`写入首帧失败：${error.message}`, true); }
+    } catch (error) {
+      const message = `无法把尾帧设为当前项首帧：${error.message}`;
+      if (ui.itemDialog.open) ui.itemError.textContent = message;
+      setStatus(message, true);
+    }
+  }
+
+  async function ensureAssetActive(assetID) {
+    let asset = assetCache.get(assetID);
+    try {
+      if (!asset) asset = await request(`/api/v1/assets/${encodeURIComponent(assetID)}`);
+      if (asset.state !== "active") {
+        asset = await request(`/api/v1/assets/${encodeURIComponent(assetID)}/state`, jsonOptions("POST", { state: "active" }));
+      }
+      assetCache.set(asset.id, asset);
+      return asset;
+    } catch (error) {
+      throw new Error(`无法先将归档尾帧设为精选：${error.message}`);
+    }
+  }
+
+  async function useTailAsNewItem(assetID) {
+    try {
+      await ensureAssetActive(assetID);
+      openItemEditor("", assetID);
+      setStatus("尾帧已激活并填入新请求项首帧，请编辑后保存。");
+    } catch (error) {
+      setStatus(`无法用尾帧创建请求项：${error.message}`, true);
+    }
   }
 
   async function saveTailLog(extractionID) {
@@ -1210,17 +1379,14 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       configuration.cli_presets ??= [];
       configuration.tail_frame_presets ??= [];
       batches = batchBody.batches ?? [];
-      tailBySourceAsset.clear();
-      for (const extraction of tailBody.extractions ?? []) {
-        const existing = tailBySourceAsset.get(extraction.source_asset_id);
-        if (!existing || new Date(extraction.created_at) > new Date(existing.created_at)) tailBySourceAsset.set(extraction.source_asset_id, extraction);
-      }
-      if (!batches.some((batch) => batch.id === selectedBatchID)) selectedBatchID = batches[0]?.id ?? "";
+      tailExtractionsBySource.clear();
+      for (const extraction of tailBody.extractions ?? []) upsertTailExtraction(extraction);
+      const nextBatchID = batches.some((batch) => batch.id === selectedBatchID) ? selectedBatchID : (batches[0]?.id ?? "");
       renderFolderFilter();
       renderBatchList();
       renderTailPresets();
-      if (selectedBatchID) await selectBatch(selectedBatchID, { discardDraft: true });
-      else renderWorkspace();
+      if (nextBatchID) await selectBatch(nextBatchID, { discardDraft: true });
+      else await selectBatch("", { discardDraft: true });
     } catch (error) {
       if (active && version === loadVersion) setStatus(`读取视频工作区失败：${error.message}`, true);
     }
@@ -1231,6 +1397,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     loadVersion += 1;
     batchListVersion += 1;
     detailVersion += 1;
+    selectionVersion += 1;
     detailRefreshPending = false;
     batchDraftDirty = false;
     closeBatchEvents();
