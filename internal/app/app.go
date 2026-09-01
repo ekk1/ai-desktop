@@ -22,6 +22,7 @@ import (
 	"github.com/ekk1/ai-desktop/internal/provider"
 	"github.com/ekk1/ai-desktop/internal/sdcpp"
 	"github.com/ekk1/ai-desktop/internal/session"
+	"github.com/ekk1/ai-desktop/internal/videogen"
 	"github.com/ekk1/ai-desktop/internal/web"
 )
 
@@ -44,6 +45,8 @@ type applicationRuntime struct {
 	backendManager *backend.Manager
 	llmManager     *llm.Manager
 	imageManager   *imagegen.Manager
+	videoManager   *videogen.Manager
+	tailExtractor  *videogen.TailExtractor
 }
 
 func newRuntime(dataDir string, cfg config.Config, version string, portOverride int) (*applicationRuntime, error) {
@@ -81,6 +84,25 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 	imageService := imagegen.NewService(imageRepository, assetRepository)
 	imageClient := sdcpp.Client{}
 	imageManager := imagegen.NewManager(configRepository, imageService, imagegen.NewAssembler(assetRepository), assetRepository, imageClient)
+	videoRepository, err := videogen.OpenRepository(filepath.Join(dataDir, "videos", "batches"))
+	if err != nil {
+		return nil, fmt.Errorf("open video batches: %w", err)
+	}
+	tailRepository, err := videogen.OpenTailRepository(filepath.Join(dataDir, "videos", "tail-extractions.json"))
+	if err != nil {
+		return nil, fmt.Errorf("open tail extractions: %w", err)
+	}
+	workspaceRoot := filepath.Join(dataDir, "video-workspace")
+	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("open video workspace: %w", err)
+	}
+	if err := os.Chmod(workspaceRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("protect video workspace: %w", err)
+	}
+	videoService := videogen.NewService(videoRepository, assetRepository)
+	cliExecutor := videogen.NewCLIExecutor()
+	videoManager := videogen.NewManager(configRepository, videoService, videogen.NewHTTPAssembler(assetRepository), sdcpp.VideoClient{}, videogen.NewWorkspaceManager(workspaceRoot, assetRepository), cliExecutor, assetRepository)
+	tailExtractor := videogen.NewTailExtractor(configRepository, tailRepository, assetRepository, cliExecutor, filepath.Join(dataDir, "videos", "tail-workspaces"), filepath.Join(dataDir, "videos", "tail-logs"))
 	knowledgeRepository, err := knowledge.OpenRepository(filepath.Join(dataDir, "knowledge", "notes.json"))
 	if err != nil {
 		return nil, fmt.Errorf("open knowledge repository: %w", err)
@@ -118,12 +140,17 @@ func newRuntime(dataDir string, cfg config.Config, version string, portOverride 
 			ImageCapabilities: imageClient,
 			ImageService:      imageService,
 			ImageManager:      imageManager,
+			VideoCapabilities: imageClient,
+			VideoService:      videoService,
+			VideoManager:      videoManager,
+			TailExtractor:     tailExtractor,
+			TailRepository:    tailRepository,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	return &applicationRuntime{server: server, backendManager: manager, llmManager: llmManager, imageManager: imageManager}, nil
+	return &applicationRuntime{server: server, backendManager: manager, llmManager: llmManager, imageManager: imageManager, videoManager: videoManager, tailExtractor: tailExtractor}, nil
 }
 
 func (runtime *applicationRuntime) shutdownManagers(ctx context.Context) error {
@@ -131,6 +158,8 @@ func (runtime *applicationRuntime) shutdownManagers(ctx context.Context) error {
 		runtime.imageManager.Shutdown,
 		runtime.llmManager.Shutdown,
 		runtime.backendManager.Shutdown,
+		runtime.videoManager.Shutdown,
+		runtime.tailExtractor.Shutdown,
 	}
 	errorsFound := make(chan error, len(shutdowns))
 	var wait sync.WaitGroup

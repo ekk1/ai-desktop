@@ -43,6 +43,28 @@ func TestNewServerAlwaysUsesLoopbackAddress(t *testing.T) {
 	}
 }
 
+func TestApplicationOpensVideoPersistencePaths(t *testing.T) {
+	dataDir := t.TempDir()
+	runtime, err := newRuntime(dataDir, config.Default(), "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.shutdownManagers(shutdownContext); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(dataDir, "videos", "batches"),
+		filepath.Join(dataDir, "videos", "tail-extractions.json"),
+		filepath.Join(dataDir, "video-workspace"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("video path %q: %v", path, err)
+		}
+	}
+}
+
 func TestNewServerBoundsRequestReadsWithoutBoundingSSEWrites(t *testing.T) {
 	server, err := NewServer(t.TempDir(), config.Default(), "test", 0)
 	if err != nil {

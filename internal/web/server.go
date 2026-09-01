@@ -16,6 +16,7 @@ import (
 	"github.com/ekk1/ai-desktop/internal/knowledge"
 	"github.com/ekk1/ai-desktop/internal/llm"
 	"github.com/ekk1/ai-desktop/internal/session"
+	"github.com/ekk1/ai-desktop/internal/videogen"
 )
 
 //go:embed static/*
@@ -36,6 +37,11 @@ type Options struct {
 	ImageCapabilities ImageCapabilitiesClient
 	ImageService      *imagegen.Service
 	ImageManager      *imagegen.Manager
+	VideoCapabilities VideoCapabilitiesClient
+	VideoService      *videogen.Service
+	VideoManager      *videogen.Manager
+	TailExtractor     *videogen.TailExtractor
+	TailRepository    *videogen.TailRepository
 }
 
 type errorEnvelope struct {
@@ -111,6 +117,23 @@ func NewHandler(options Options) http.Handler {
 		}
 		mux.HandleFunc("/api/v1/images/config", imageConfigurationAPI.serve)
 		mux.HandleFunc("/api/v1/images/providers/", imageConfigurationAPI.serve)
+		videoConfigurationAPI := videoConfigHandler{repository: options.ConfigRepository, capabilities: options.VideoCapabilities, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/videos/config", videoConfigurationAPI.serve)
+		mux.HandleFunc("/api/v1/videos/providers/", videoConfigurationAPI.serve)
+	}
+	if options.VideoService != nil && options.AssetRepository != nil && options.ConfigRepository != nil {
+		videoAPI := videoBatchHandler{service: options.VideoService, assets: options.AssetRepository, config: options.ConfigRepository, manager: options.VideoManager, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/videos/batches", videoAPI.serve)
+		mux.HandleFunc("/api/v1/videos/batches/", videoAPI.serve)
+	}
+	if options.VideoManager != nil {
+		attemptAPI := videoAttemptHandler{manager: options.VideoManager, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/videos/attempts/", attemptAPI.serve)
+	}
+	if options.TailExtractor != nil && options.TailRepository != nil {
+		tailAPI := videoTailHandler{extractor: options.TailExtractor, repository: options.TailRepository, maxBody: options.Config.MaxUploadBytes}
+		mux.HandleFunc("/api/v1/videos/tail-extractions", tailAPI.serve)
+		mux.HandleFunc("/api/v1/videos/tail-extractions/", tailAPI.serve)
 	}
 	if options.SessionService != nil {
 		var runAPI *llmRunHandler
