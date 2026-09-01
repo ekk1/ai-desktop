@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,6 +33,32 @@ func TestVideoBatchAPICreatesAndRejectsNonHexRouteID(t *testing.T) {
 	h.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches", bytes.NewReader(body)))
 	if r.Code != http.StatusCreated {
 		t.Fatalf("create=%d %s", r.Code, r.Body.String())
+	}
+	var created videogen.Batch
+	if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/videos/batches?q=one", "/api/v1/videos/batches?folder=test", "/api/v1/videos/batches/" + created.ID} {
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s", path, response.Code, response.Body.String())
+		}
+	}
+	updated := httptest.NewRecorder()
+	h.ServeHTTP(updated, httptest.NewRequest(http.MethodPut, "/api/v1/videos/batches/"+created.ID, bytes.NewBufferString(`{"title":"two","folder":"changed","execution_kind":"http","preset_id":"sdcpp-video-local","concurrency":1,"common_params":{},"timing":{"mode":"frames","video_frames":1,"fps":1}}`)))
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update=%d %s", updated.Code, updated.Body.String())
+	}
+	unknown := httptest.NewRecorder()
+	h.ServeHTTP(unknown, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches", bytes.NewBufferString(`{"unknown":true}`)))
+	if unknown.Code != http.StatusBadRequest {
+		t.Fatalf("unknown=%d", unknown.Code)
+	}
+	deleted := httptest.NewRecorder()
+	h.ServeHTTP(deleted, httptest.NewRequest(http.MethodDelete, "/api/v1/videos/batches/"+created.ID, nil))
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete=%d %s", deleted.Code, deleted.Body.String())
 	}
 	r = httptest.NewRecorder()
 	h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/v1/videos/batches/not-an-id", nil))

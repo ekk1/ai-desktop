@@ -38,11 +38,17 @@ func TestVideoAttemptAPIExecutesGetsAndCancels(t *testing.T) {
 		t.Fatalf("execute=%d %s %v", r.Code, r.Body.String(), err)
 	}
 	id := accepted.Attempts[0].ID
+	if duplicate := fixture.request(http.MethodPost, "/api/v1/videos/batches/"+batch.ID+"/items/"+items[0].ID+"/execute", []byte(`{}`)); duplicate.Code != http.StatusConflict {
+		t.Fatalf("active=%d %s", duplicate.Code, duplicate.Body.String())
+	}
 	if got := fixture.request(http.MethodGet, "/api/v1/videos/attempts/"+id, nil); got.Code != http.StatusOK {
 		t.Fatalf("get=%d %s", got.Code, got.Body.String())
 	}
 	if got := fixture.request(http.MethodPost, "/api/v1/videos/attempts/"+id+"/cancel", []byte(`{}`)); got.Code != http.StatusAccepted {
 		t.Fatalf("cancel=%d %s", got.Code, got.Body.String())
+	}
+	if retry := fixture.request(http.MethodPost, "/api/v1/videos/attempts/"+id+"/retry", []byte(`{}`)); retry.Code != http.StatusAccepted {
+		t.Fatalf("retry=%d %s", retry.Code, retry.Body.String())
 	}
 }
 
@@ -52,7 +58,7 @@ func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	videos := videoconfig.Config{CLIPresets: []videoconfig.CLIPreset{{ID: "local-cli", Name: "Local", Enabled: true, ExecutionKind: videoconfig.ExecutionLocalCLI, CommandTemplate: "printf cli-log; sleep 1; printf '\\x1a\\x45\\xdf\\xa3' > {{OUTPUT_PATH}}", WorkDir: "/tmp", Env: map[string]string{}, TimeoutSeconds: 2, StopGraceSeconds: 0, LogBufferBytes: 1024, OutputRelativePath: "outputs/result.webm", OutputMediaType: "video/webm", OutputExtension: ".webm", MaxOutputBytes: 1024, DefaultParams: json.RawMessage(`{}`)}}}
+	videos := videoconfig.Config{CLIPresets: []videoconfig.CLIPreset{{ID: "local-cli", Name: "Local", Enabled: true, ExecutionKind: videoconfig.ExecutionLocalCLI, CommandTemplate: "sleep 0.05; printf cli-log; sleep 1; printf '\\x1a\\x45\\xdf\\xa3' > {{OUTPUT_PATH}}", WorkDir: "/tmp", Env: map[string]string{}, TimeoutSeconds: 2, StopGraceSeconds: 0, LogBufferBytes: 1024, OutputRelativePath: "outputs/result.webm", OutputMediaType: "video/webm", OutputExtension: ".webm", MaxOutputBytes: 1024, DefaultParams: json.RawMessage(`{}`)}}}
 	if _, err := cfg.UpdateVideos(videos); err != nil {
 		t.Fatal(err)
 	}
@@ -94,9 +100,37 @@ func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	if first != "event: snapshot\n" || !strings.Contains(data, `"start_offset"`) || !strings.Contains(data, `"data_base64"`) {
 		t.Fatalf("snapshot=%q %q", first, data)
 	}
-	heartbeat, err := reader.ReadString('\n')
-	if err != nil || heartbeat != ": heartbeat\n" {
-		t.Fatalf("heartbeat=%q err=%v", heartbeat, err)
+	foundChunk, foundHeartbeat := false, false
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && (!foundChunk || !foundHeartbeat) {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			t.Fatalf("SSE read: %v", readErr)
+		}
+		if line == ": heartbeat\n" {
+			if blank, err := reader.ReadString('\n'); err != nil || blank != "\n" {
+				t.Fatalf("heartbeat terminator=%q err=%v", blank, err)
+			}
+			foundHeartbeat = true
+			continue
+		}
+		if line != "event: chunk\n" {
+			t.Fatalf("unexpected SSE line %q", line)
+		}
+		chunk, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blank, err := reader.ReadString('\n'); err != nil || blank != "\n" {
+			t.Fatalf("chunk terminator=%q err=%v", blank, err)
+		}
+		if !strings.Contains(chunk, `"start_offset":0`) || !strings.Contains(chunk, `"data_base64":"Y2xpLWxvZw=="`) {
+			t.Fatalf("chunk=%q", chunk)
+		}
+		foundChunk = true
+	}
+	if !foundChunk || !foundHeartbeat {
+		t.Fatalf("chunk=%v heartbeat=%v", foundChunk, foundHeartbeat)
 	}
 }
 

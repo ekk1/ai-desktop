@@ -55,6 +55,44 @@ func TestVideoCapabilitiesAPIMapsSavedProviderAndMode(t *testing.T) {
 	}
 }
 
+func TestVideoCapabilitiesAPIErrorsAndUnsupportedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, id  string
+		disable   bool
+		err       error
+		want      int
+		supported bool
+	}{
+		{"missing", "missing", false, nil, 404, false}, {"disabled", "sdcpp-video-local", true, nil, 400, false},
+		{"timeout", "sdcpp-video-local", false, context.DeadlineExceeded, 504, false}, {"upstream", "sdcpp-video-local", false, &sdcpp.HTTPError{StatusCode: 500, Body: "bad"}, 502, false},
+		{"unsupported", "sdcpp-video-local", false, nil, 200, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			repo, err := config.OpenRepository(filepath.Join(root, "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.disable {
+				videos := repo.Snapshot().Videos
+				videos.HTTPProviders[0].Enabled = false
+				if _, err := repo.UpdateVideos(videos); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h := NewHandler(Options{Config: repo.Snapshot(), ConfigRepository: repo, VideoCapabilities: videoCapabilitiesStub{result: sdcpp.Capabilities{SupportedModes: []string{"img_gen"}}, err: tc.err}})
+			r := httptest.NewRecorder()
+			h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/v1/videos/providers/"+tc.id+"/capabilities", nil))
+			if r.Code != tc.want {
+				t.Fatalf("status=%d body=%s", r.Code, r.Body.String())
+			}
+			if tc.want == 200 && !bytes.Contains(r.Body.Bytes(), []byte(`"video_generation_supported":false`)) {
+				t.Fatal(r.Body.String())
+			}
+		})
+	}
+}
+
 func TestSafeDataLocationRedactsAbsolutePathsAndRejectsOutside(t *testing.T) {
 	root := t.TempDir()
 	location, err := safeDataLocation(root, filepath.Join(root, "videos", "video-logs", "attempt.log"))
