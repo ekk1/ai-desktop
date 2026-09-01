@@ -705,6 +705,21 @@ func TestEmbeddedVideoWorkspaceFinalFixCContracts(t *testing.T) {
 		}
 		return script[startAt : startAt+len(start)+endAt]
 	}
+	strictBase64 := section("function base64Bytes", "function appendBytes")
+	for _, marker := range []string{`typeof value !== "string"`, `value.length % 4`, `base64Pattern.test(value)`, `const binary = atob(value)`, `btoa(binary) !== value`} {
+		if !strings.Contains(strictBase64, marker) {
+			t.Errorf("raw log Base64 validation is not strict/canonical: missing %s", marker)
+		}
+	}
+	if strings.Contains(strictBase64, `value || ""`) {
+		t.Error("missing raw-log Base64 must not be coerced to an empty payload")
+	}
+	attemptLogConnect := section("function connectAttemptLog", "function closeAttemptLog")
+	for _, marker := range []string{`receiveLogSnapshot(JSON.parse(event.data))`, `receiveLogChunk(JSON.parse(event.data))`, `catch (error) { invalidateLogStream`} {
+		if !strings.Contains(attemptLogConnect, marker) {
+			t.Errorf("CLI malformed Base64 does not reach stream invalidation: missing %s", marker)
+		}
+	}
 
 	itemEditor := section("function openItemEditor", "function updateItemActions")
 	populateAt, syncAt, showAt := strings.Index(itemEditor, "item?.timing_override"), strings.Index(itemEditor, "syncItemTimingControls()"), strings.Index(itemEditor, "ui.itemDialog.showModal()")
@@ -734,6 +749,12 @@ func TestEmbeddedVideoWorkspaceFinalFixCContracts(t *testing.T) {
 	gapAt, mutationAt := strings.Index(tailChunk, "startOffset > view.endOffset"), strings.Index(tailChunk, "view.bytes = appendBytes")
 	if gapAt < 0 || mutationAt < 0 || gapAt > mutationAt || !strings.Contains(tailChunk[:mutationAt], "invalidateTailLogStream") {
 		t.Error("Tail log gaps must invalidate and reconnect before any byte mutation")
+	}
+	tailLogConnect := section("function connectTailLog", "function clearTailLogLocally")
+	for _, marker := range []string{`receiveTailLogSnapshot(view, JSON.parse(event.data))`, `receiveTailLogChunk(view, JSON.parse(event.data))`, `catch (error) { invalidateTailLogStream`} {
+		if !strings.Contains(tailLogConnect, marker) {
+			t.Errorf("Tail malformed Base64 does not reach stream invalidation: missing %s", marker)
+		}
 	}
 	tailClear := section("function clearTailLogLocally", "function renderTailHistory")
 	clearAt, rememberAt, renderAt := strings.Index(tailClear, "view.clearOffset = view.endOffset"), strings.Index(tailClear, "tailLogClearOffsets.set"), strings.Index(tailClear, "renderTailLog(view)")

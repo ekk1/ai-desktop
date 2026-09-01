@@ -1,6 +1,7 @@
 const terminalAttemptStates = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
 const activeAttemptStates = new Set(["queued", "submitting", "polling", "running"]);
 const defaultTiming = { mode: "frames", video_frames: 49, fps: 12 };
+const base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   const ui = {
@@ -1024,7 +1025,11 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   }
 
   function base64Bytes(value) {
-    const binary = atob(value || "");
+    if (typeof value !== "string") throw new Error("日志 data_base64 必须是字符串");
+    if (value === "") return new Uint8Array();
+    if (value.length % 4 !== 0 || !base64Pattern.test(value)) throw new Error("日志 data_base64 不是规范的补位 Base64");
+    const binary = atob(value);
+    if (btoa(binary) !== value) throw new Error("日志 data_base64 不是规范编码");
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
     return bytes;
