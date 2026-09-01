@@ -138,10 +138,10 @@ func readTestSSEEvents(t *testing.T, scanner *bufio.Scanner, count int) []testSS
 		case line == "":
 			var payload struct {
 				Offset int64  `json:"offset"`
-				Data   string `json:"data"`
+				Data   []byte `json:"data"`
 			}
 			decodeTestJSON(t, data, &payload)
-			events = append(events, testSSEEvent{kind: kind, offset: payload.Offset, data: payload.Data})
+			events = append(events, testSSEEvent{kind: kind, offset: payload.Offset, data: string(payload.Data)})
 			if len(events) == count {
 				return events
 			}

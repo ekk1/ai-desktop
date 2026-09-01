@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,11 +212,7 @@ func (client Client) readLogEvents(ctx context.Context, body io.ReadCloser, even
 	defer close(events)
 	defer close(failures)
 	scanner := bufio.NewScanner(body)
-	maxEvent := client.responseLimit()
-	if maxEvent > int64(^uint(0)>>1) {
-		maxEvent = int64(^uint(0) >> 1)
-	}
-	scanner.Buffer(make([]byte, 64<<10), int(maxEvent))
+	scanner.Buffer(make([]byte, 64<<10), encodedLogEventLimit(client.responseLimit()))
 	var kind, data string
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -259,13 +256,22 @@ func (client Client) readLogEvents(ctx context.Context, body io.ReadCloser, even
 	}
 }
 
+func encodedLogEventLimit(decodedLimit int64) int {
+	maxInt := int(^uint(0) >> 1)
+	maxDecoded := (maxInt - 1024) / 4 * 3
+	if decodedLimit > int64(maxDecoded) {
+		return maxInt
+	}
+	return base64.StdEncoding.EncodedLen(int(decodedLimit)) + 1024
+}
+
 func decodeLogEvent(kind, data string) (LogEvent, error) {
 	if kind != "snapshot" && kind != "chunk" {
 		return LogEvent{}, fmt.Errorf("decode log event: unsupported event %q", kind)
 	}
 	var payload struct {
 		Offset int64  `json:"offset"`
-		Data   string `json:"data"`
+		Data   []byte `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
 		return LogEvent{}, fmt.Errorf("decode log event: %w", err)
@@ -273,7 +279,7 @@ func decodeLogEvent(kind, data string) (LogEvent, error) {
 	if payload.Offset < 0 {
 		return LogEvent{}, fmt.Errorf("decode log event: offset must not be negative")
 	}
-	return LogEvent{Kind: kind, Offset: payload.Offset, Data: []byte(payload.Data)}, nil
+	return LogEvent{Kind: kind, Offset: payload.Offset, Data: payload.Data}, nil
 }
 
 func (client Client) responseLimit() int64 {

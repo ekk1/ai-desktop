@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +12,26 @@ import (
 	"testing"
 	"time"
 )
+
+func TestLogEventSSEPreservesArbitraryBytes(t *testing.T) {
+	want := []byte{0xff, 0xfe, 0xe4, 0xb8}
+	var stream bytes.Buffer
+	writeWorkerSSE(&stream, "chunk", 17, want)
+
+	var data string
+	for _, line := range strings.Split(stream.String(), "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			data = strings.TrimPrefix(line, "data: ")
+		}
+	}
+	event, err := decodeLogEvent("chunk", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Offset != 17 || !bytes.Equal(event.Data, want) {
+		t.Fatalf("event = offset %d data %x, want offset 17 data %x", event.Offset, event.Data, want)
+	}
+}
 
 func TestClientLifecycleAgainstRealHandler(t *testing.T) {
 	manager := NewManager("instance-test")
@@ -97,9 +119,9 @@ func TestClientSubscribeLogsParsesEventsAndCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/event-stream")
 		flusher := response.(http.Flusher)
-		_, _ = fmt.Fprint(response, "event: snapshot\ndata: {\"offset\":4,\"data\":\"old\\n\"}\n\n")
+		_, _ = fmt.Fprint(response, "event: snapshot\ndata: {\"offset\":4,\"data\":\"b2xkCg==\"}\n\n")
 		flusher.Flush()
-		_, _ = fmt.Fprint(response, "event: chunk\ndata: {\"offset\":8,\"data\":\"new\\n\"}\n\n")
+		_, _ = fmt.Fprint(response, "event: chunk\ndata: {\"offset\":8,\"data\":\"bmV3Cg==\"}\n\n")
 		flusher.Flush()
 		<-request.Context().Done()
 	}))
@@ -126,6 +148,35 @@ func TestClientSubscribeLogsParsesEventsAndCancellation(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("stream did not stop after cancellation")
+	}
+}
+
+func TestClientSubscribeLogsAllowsBase64ExpansionWithinDecodedLimit(t *testing.T) {
+	want := bytes.Repeat([]byte{0xff, 'x', 0x80}, 24<<10)
+	payload, err := json.Marshal(struct {
+		Offset int64  `json:"offset"`
+		Data   []byte `json:"data"`
+	}{Offset: 9, Data: want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(response, "event: snapshot\ndata: %s\n\n", payload)
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTPClient: server.Client(), MaxResponseBytes: int64(len(want))}
+
+	events, failures, err := client.SubscribeLogs(context.Background(), "run-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := receiveClientLogEvent(t, events)
+	if event.Offset != 9 || !bytes.Equal(event.Data, want) {
+		t.Fatalf("event = offset %d data length %d, want offset 9 data length %d", event.Offset, len(event.Data), len(want))
+	}
+	if failure, open := <-failures; open && failure != nil {
+		t.Fatalf("stream error = %v", failure)
 	}
 }
 

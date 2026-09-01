@@ -194,7 +194,7 @@ func writeWorkerError(response http.ResponseWriter, status int, code, message st
 func writeWorkerSSE(response io.Writer, kind string, offset int64, data []byte) {
 	payload, _ := json.Marshal(struct {
 		Offset int64  `json:"offset"`
-		Data   string `json:"data"`
-	}{Offset: offset, Data: string(data)})
+		Data   []byte `json:"data"`
+	}{Offset: offset, Data: data})
 	_, _ = fmt.Fprintf(response, "event: %s\ndata: %s\n\n", kind, payload)
 }
