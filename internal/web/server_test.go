@@ -235,6 +235,45 @@ func TestEmbeddedImageConfigExposesProgressiveProviderEditors(t *testing.T) {
 	}
 }
 
+func TestEmbeddedVideoConfigExposesProgressivePresetEditors(t *testing.T) {
+	index := getBody(t, "/")
+	for _, marker := range []string{
+		`id="video-http-provider-list"`, `id="video-http-provider-new"`,
+		`id="video-cli-preset-list"`, `id="video-cli-preset-new"`,
+		`id="video-tail-frame-preset-list"`, `id="video-tail-frame-preset-new"`,
+		`id="video-config-refresh"`, `id="video-config-save"`, `id="video-config-save-status"`,
+		`id="video-http-provider-editor"`, `id="video-cli-preset-editor"`, `id="video-tail-frame-preset-editor"`,
+		`id="video-http-provider-name"`, `id="video-http-provider-base-url"`, `id="video-http-provider-enabled"`, `id="video-http-provider-concurrency"`,
+		`id="video-cli-preset-command"`, `id="video-cli-preset-work-dir"`, `id="video-cli-preset-output-path"`,
+		`id="video-tail-frame-preset-command"`, `id="video-tail-frame-preset-extension"`,
+		`<details class="advanced-form">`, `仅本机执行`, `_RAW`,
+	} {
+		if !strings.Contains(index, marker) {
+			t.Errorf("video config UI does not contain %s", marker)
+		}
+	}
+	videoMarkup := index[strings.Index(index, `id="video-http-provider-editor"`):]
+	if strings.Contains(videoMarkup, "Remote Worker") || strings.Contains(videoMarkup, "远端 Worker") {
+		t.Error("video config dialogs must not offer Remote Worker")
+	}
+
+	script := getBody(t, "/assets/video-config.js")
+	for _, behavior := range []string{
+		`export function createVideoConfig`, `fetch("/api/v1/videos/config"`, `method: "PUT"`,
+		`/capabilities`, `video_generation_supported`, `JSON Object`, `clone(configuration)`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("video config script does not contain %s", behavior)
+		}
+	}
+	if strings.Contains(script, "Remote Worker") || strings.Contains(script, "远端 Worker") {
+		t.Error("video config script must not offer Remote Worker")
+	}
+	if !strings.Contains(getBody(t, "/assets/app.js"), `createVideoConfig`) {
+		t.Error("app does not wire createVideoConfig")
+	}
+}
+
 func TestEmbeddedLLMWorkspaceExposesBranchingPanelControls(t *testing.T) {
 	index := getBody(t, "/")
 	for _, marker := range []string{

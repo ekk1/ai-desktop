@@ -1,6 +1,7 @@
 import { createLLMConfig } from "/assets/llm-config.js";
 import { createLLMWorkspace } from "/assets/llm.js";
 import { createImageConfig } from "/assets/image-config.js";
+import { createVideoConfig } from "/assets/video-config.js";
 import { createImageWorkspace } from "/assets/images.js";
 
 const modules = {
@@ -65,6 +66,7 @@ const knowledgeWorkspace = document.querySelector("#knowledge-workspace");
 const settingsWorkspace = document.querySelector("#settings-workspace");
 const llmConfigWorkspace = createLLMConfig({ readAPIError });
 const imageConfigWorkspace = createImageConfig({ readAPIError });
+const videoConfigWorkspace = createVideoConfig({ readAPIError });
 const llmWorkspaceController = createLLMWorkspace({ sidebarContent, sidebarSearch: document.querySelector("#sidebar-search"), readAPIError, openAssetPicker });
 const imageWorkspaceController = createImageWorkspace({ sidebarContent, sidebarSearch: document.querySelector("#sidebar-search"), readAPIError, openAssetPicker });
 
@@ -156,9 +158,11 @@ function selectModule(name) {
   if (showSettings) {
     llmConfigWorkspace.enter();
     imageConfigWorkspace.enter();
+    videoConfigWorkspace.enter();
   } else {
     llmConfigWorkspace.leave();
     imageConfigWorkspace.leave();
+    videoConfigWorkspace.leave();
   }
   if (showLLM) llmWorkspaceController.enter();
   else llmWorkspaceController.leave();

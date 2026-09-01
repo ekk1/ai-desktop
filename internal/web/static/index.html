@@ -398,6 +398,36 @@
           <p class="inline-message" id="llm-config-save-status" aria-live="polite">尚未读取配置。</p>
 
           <div class="settings-sections">
+            <section class="settings-card settings-card-wide" aria-labelledby="video-http-provider-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">视频生成</p><h3 id="video-http-provider-heading">HTTP Providers</h3></div>
+                <div class="button-row compact-buttons">
+                  <button type="button" class="text-button" id="video-config-refresh">重新读取</button>
+                  <button type="button" class="secondary-button" id="video-http-provider-new">新增 Provider</button>
+                  <button type="button" class="primary-button" id="video-config-save">保存视频配置</button>
+                </div>
+              </header>
+              <p class="inline-message" id="video-config-save-status" aria-live="polite">尚未读取视频配置。</p>
+              <div class="config-row-list" id="video-http-provider-list"></div>
+            </section>
+
+            <section class="settings-card" aria-labelledby="video-cli-preset-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">本地命令</p><h3 id="video-cli-preset-heading">CLI Presets</h3></div>
+                <button type="button" class="secondary-button" id="video-cli-preset-new">新增 CLI</button>
+              </header>
+              <p class="inline-message video-config-notice">仅本机执行。命令模板中的 <code>_RAW</code> 变量会直接信任原始内容，请仅使用可信预设。</p>
+              <div class="config-row-list" id="video-cli-preset-list"></div>
+            </section>
+
+            <section class="settings-card" aria-labelledby="video-tail-frame-preset-heading">
+              <header class="settings-card-heading">
+                <div><p class="eyebrow">尾帧提取</p><h3 id="video-tail-frame-preset-heading">Tail Frame Presets</h3></div>
+                <button type="button" class="secondary-button" id="video-tail-frame-preset-new">新增尾帧预设</button>
+              </header>
+              <div class="config-row-list" id="video-tail-frame-preset-list"></div>
+            </section>
+
             <section class="settings-card settings-card-wide" aria-labelledby="image-provider-heading">
               <header class="settings-card-heading">
                 <div><p class="eyebrow">stable-diffusion.cpp</p><h3 id="image-provider-heading">Image Providers</h3></div>
@@ -563,6 +593,90 @@
       </footer>
     </form>
   </dialog>
+  <dialog id="video-http-provider-editor" class="editor-dialog config-editor-dialog">
+    <form id="video-http-provider-form">
+      <header class="dialog-heading"><div><p class="eyebrow">视频生成</p><h2 id="video-http-provider-editor-title">HTTP Provider</h2></div><button type="button" class="text-button" data-video-dialog-close>关闭</button></header>
+      <div class="form-grid">
+        <label>ID <input id="video-http-provider-id" required maxlength="120"></label>
+        <label>名称 <input id="video-http-provider-name" required maxlength="240"></label>
+        <label class="full-width">Base URL <input id="video-http-provider-base-url" type="url" required placeholder="http://127.0.0.1:1234"></label>
+        <label>最大并发任务 <input id="video-http-provider-concurrency" type="number" min="1" max="16" required></label>
+        <label class="checkbox-field"><input id="video-http-provider-enabled" type="checkbox"> 启用</label>
+      </div>
+      <details class="advanced-form">
+        <summary>Headers、默认参数、超时与限额</summary>
+        <div class="form-grid details-grid">
+          <label class="full-width">Headers JSON Object <textarea id="video-http-provider-headers" rows="5" spellcheck="false">{}</textarea></label>
+          <label class="full-width">Default Params JSON Object <textarea id="video-http-provider-default-params" rows="6" spellcheck="false">{}</textarea></label>
+          <label>连接超时（秒） <input id="video-http-provider-connect-timeout" type="number" min="1" max="86400" required></label>
+          <label>任务超时（秒） <input id="video-http-provider-job-timeout" type="number" min="1" max="86400" required></label>
+          <label>轮询间隔（毫秒） <input id="video-http-provider-poll-interval" type="number" min="100" max="10000" required></label>
+          <label>请求上限（字节） <input id="video-http-provider-max-request" type="number" min="1" max="2147483648" required></label>
+          <label>错误响应上限（字节） <input id="video-http-provider-max-error" type="number" min="1" max="65536" required></label>
+          <label>视频上限（字节） <input id="video-http-provider-max-video" type="number" min="1" max="4294967296" required></label>
+          <label>输入图上限（字节） <input id="video-http-provider-max-input" type="number" min="1" max="1073741824" required></label>
+        </div>
+      </details>
+      <p class="inline-message" id="video-http-provider-capability-status" aria-live="polite">保存后可测试 capabilities。</p>
+      <p class="form-error" id="video-http-provider-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-video-dialog-close>取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="video-cli-preset-editor" class="editor-dialog config-editor-dialog">
+    <form id="video-cli-preset-form">
+      <header class="dialog-heading"><div><p class="eyebrow">本机执行</p><h2 id="video-cli-preset-editor-title">CLI Preset</h2></div><button type="button" class="text-button" data-video-dialog-close>关闭</button></header>
+      <p class="inline-message video-config-notice">仅本机执行；<code>_RAW</code> 变量会将原始内容直接交给命令，请只配置可信命令。</p>
+      <div class="form-grid">
+        <label>ID <input id="video-cli-preset-id" required maxlength="120"></label>
+        <label>名称 <input id="video-cli-preset-name" required maxlength="240"></label>
+        <label class="full-width">命令模板 <textarea id="video-cli-preset-command" rows="5" required spellcheck="false"></textarea></label>
+        <label>工作目录 <input id="video-cli-preset-work-dir" placeholder="留空则继承工作台目录"></label>
+        <label>精确输出路径 <input id="video-cli-preset-output-path" required placeholder="outputs/result.webm"></label>
+        <label>输出 MIME <input id="video-cli-preset-output-media-type" required value="video/webm"></label>
+        <label>输出扩展名 <input id="video-cli-preset-output-extension" required value=".webm"></label>
+        <label class="checkbox-field"><input id="video-cli-preset-enabled" type="checkbox"> 启用</label>
+      </div>
+      <details class="advanced-form">
+        <summary>预处理、Env、默认参数与限额</summary>
+        <div class="form-grid details-grid">
+          <label class="full-width">预处理命令模板 <textarea id="video-cli-preset-prepare-command" rows="3" spellcheck="false"></textarea></label>
+          <label class="full-width">Env JSON Object <textarea id="video-cli-preset-env" rows="5" spellcheck="false">{}</textarea></label>
+          <label class="full-width">Default Params JSON Object <textarea id="video-cli-preset-default-params" rows="6" spellcheck="false">{}</textarea></label>
+          <label>超时（秒） <input id="video-cli-preset-timeout" type="number" min="1" max="86400" required></label>
+          <label>停止宽限（秒） <input id="video-cli-preset-stop-grace" type="number" min="0" max="3600" required></label>
+          <label>日志缓存（字节） <input id="video-cli-preset-log-buffer" type="number" min="1" max="16777216" required></label>
+          <label>输出上限（字节） <input id="video-cli-preset-max-output" type="number" min="1" max="4294967296" required></label>
+        </div>
+      </details>
+      <p class="form-error" id="video-cli-preset-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-video-dialog-close>取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="video-tail-frame-preset-editor" class="editor-dialog config-editor-dialog">
+    <form id="video-tail-frame-preset-form">
+      <header class="dialog-heading"><div><p class="eyebrow">尾帧提取</p><h2 id="video-tail-frame-preset-editor-title">Tail Frame Preset</h2></div><button type="button" class="text-button" data-video-dialog-close>关闭</button></header>
+      <div class="form-grid">
+        <label>ID <input id="video-tail-frame-preset-id" required maxlength="120"></label>
+        <label>名称 <input id="video-tail-frame-preset-name" required maxlength="240"></label>
+        <label class="full-width">命令模板 <textarea id="video-tail-frame-preset-command" rows="5" required spellcheck="false"></textarea></label>
+        <label>输出扩展名 <select id="video-tail-frame-preset-extension"><option value=".png">.png</option><option value=".jpg">.jpg</option><option value=".jpeg">.jpeg</option><option value=".webp">.webp</option></select></label>
+        <label class="checkbox-field"><input id="video-tail-frame-preset-enabled" type="checkbox"> 启用</label>
+      </div>
+      <details class="advanced-form">
+        <summary>超时与输出限额</summary>
+        <div class="form-grid details-grid">
+          <label>超时（秒） <input id="video-tail-frame-preset-timeout" type="number" min="1" max="86400" required></label>
+          <label>停止宽限（秒） <input id="video-tail-frame-preset-stop-grace" type="number" min="0" max="3600" required></label>
+          <label>图片上限（字节） <input id="video-tail-frame-preset-max-image" type="number" min="1" max="1073741824" required></label>
+        </div>
+      </details>
+      <p class="form-error" id="video-tail-frame-preset-error" role="alert"></p>
+      <footer class="dialog-actions"><button type="button" class="secondary-button" data-video-dialog-close>取消</button><button type="submit" class="primary-button">应用到草稿</button></footer>
+    </form>
+  </dialog>
+
   <dialog id="llm-provider-editor" class="editor-dialog config-editor-dialog">
     <form id="llm-provider-form">
       <header class="dialog-heading">

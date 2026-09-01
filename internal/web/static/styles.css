@@ -396,6 +396,18 @@ input:focus-visible {
   gap: var(--space-1);
 }
 
+.video-config-notice {
+  margin-top: var(--space-3);
+  color: #8a5a22;
+}
+
+.video-config-notice code {
+  padding: 0.08rem 0.25rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, #c6842f 16%, var(--surface-strong));
+  color: inherit;
+}
+
 .config-editor-dialog {
   width: min(52rem, calc(100vw - 2rem));
 }
