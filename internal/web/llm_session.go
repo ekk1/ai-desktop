@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ekk1/ai-desktop/internal/exa"
+	"github.com/ekk1/ai-desktop/internal/llm"
 	"github.com/ekk1/ai-desktop/internal/session"
 )
 
@@ -115,7 +116,13 @@ func (handler llmSessionHandler) item(response http.ResponseWriter, request *htt
 		}
 		handler.writeWorkspace(response, http.StatusOK, workspace)
 	case http.MethodDelete:
-		if err := handler.service.DeleteSession(sessionID); err != nil {
+		var err error
+		if handler.runs != nil {
+			err = handler.runs.manager.DeleteSession(sessionID)
+		} else {
+			err = handler.service.DeleteSession(sessionID)
+		}
+		if err != nil {
 			handler.writeError(response, err)
 			return
 		}
@@ -245,6 +252,8 @@ func toPanelResponse(panel session.Panel) panelResponse {
 
 func (handler llmSessionHandler) writeError(response http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, llm.ErrSessionHasActiveRun):
+		writeAPIError(response, http.StatusConflict, "active_runs", err.Error())
 	case errors.Is(err, session.ErrSessionNotFound), errors.Is(err, session.ErrPanelNotFound), errors.Is(err, session.ErrRevisionNotFound):
 		writeAPIError(response, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, session.ErrRootPanel):

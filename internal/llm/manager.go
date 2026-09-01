@@ -23,9 +23,10 @@ const (
 )
 
 var (
-	ErrRunNotFound   = errors.New("LLM run not found")
-	ErrRunNotActive  = errors.New("LLM run is not active")
-	ErrManagerClosed = errors.New("LLM run manager is closed")
+	ErrRunNotFound         = errors.New("LLM run not found")
+	ErrRunNotActive        = errors.New("LLM run is not active")
+	ErrManagerClosed       = errors.New("LLM run manager is closed")
+	ErrSessionHasActiveRun = errors.New("session has active LLM runs")
 )
 
 type RunEvent struct {
@@ -163,6 +164,27 @@ func (manager *Manager) Get(runID string) (Run, bool) {
 
 func (manager *Manager) List(sessionID string) []Run {
 	return manager.store.List(sessionID)
+}
+
+func (manager *Manager) DeleteSession(sessionID string) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for runID := range manager.active {
+		if run, exists := manager.live[runID]; exists && run.SessionID == sessionID {
+			return ErrSessionHasActiveRun
+		}
+	}
+	if err := manager.sessions.DeleteSession(sessionID); err != nil {
+		return err
+	}
+	for runID, run := range manager.live {
+		if run.SessionID == sessionID {
+			delete(manager.live, runID)
+			delete(manager.subscribers, runID)
+		}
+	}
+	manager.store.ForgetSession(sessionID)
+	return nil
 }
 
 func (manager *Manager) Cancel(runID string) error {

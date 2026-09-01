@@ -126,6 +126,16 @@ func (runStore *RunStore) List(sessionID string) []Run {
 	return result
 }
 
+func (runStore *RunStore) ForgetSession(sessionID string) {
+	runStore.mu.Lock()
+	defer runStore.mu.Unlock()
+	for runID, run := range runStore.runs {
+		if run.SessionID == sessionID {
+			delete(runStore.runs, runID)
+		}
+	}
+}
+
 func (runStore *RunStore) runPath(sessionID, runID string) string {
 	return filepath.Join(runStore.root, sessionID, "runs", runID+".json")
 }
