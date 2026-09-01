@@ -609,8 +609,11 @@ func TestEmbeddedVideoWorkspaceReviewFixContracts(t *testing.T) {
 	}
 
 	currentTail := section("async function useTailAsCurrentItem", "async function ensureAssetActive")
-	if activateAt, putAt := strings.Index(currentTail, "await ensureAssetActive(assetID)"), strings.Index(currentTail, `jsonOptions("PUT"`); activateAt < 0 || putAt < 0 || activateAt > putAt {
-		t.Error("current-item tail flow does not activate the tail Asset before PUT")
+	if activateAt, draftAt := strings.Index(currentTail, "await ensureAssetActive(assetID)"), strings.Index(currentTail, "openItemEditor(item.id, assetID)"); activateAt < 0 || draftAt < 0 || activateAt > draftAt {
+		t.Error("current-item tail flow does not activate the tail Asset before opening the named Item draft")
+	}
+	if strings.Contains(currentTail, `jsonOptions("PUT"`) {
+		t.Error("current-item tail flow still silently updates the stale editor target")
 	}
 	activation := section("async function ensureAssetActive", "async function useTailAsNewItem")
 	for _, marker := range []string{"/state`, jsonOptions(\"POST\", { state: \"active\" })", "assetCache.set(asset.id, asset)", "无法先将归档尾帧设为精选"} {
@@ -660,6 +663,107 @@ func TestEmbeddedVideoWorkspaceReviewFixContracts(t *testing.T) {
 	videoEnterAt := strings.Index(appScript, "videoWorkspaceController.enter();")
 	if sidebarResetAt < 0 || videoEnterAt < 0 || sidebarResetAt > videoEnterAt {
 		t.Error("module selection contract must account for the shared sidebar reset before video enter")
+	}
+}
+
+func TestEmbeddedVideoWorkspaceFinalFixCContracts(t *testing.T) {
+	index := getBody(t, "/")
+	for _, marker := range []string{
+		`id="video-item-timing-inherit"`, `id="video-item-timing-frames"`, `id="video-item-timing-duration"`,
+		`id="video-item-frame-count"`, `id="video-item-duration-seconds"`, `id="video-item-fps"`, `id="video-item-requested-frames"`,
+		`data-video-tail-log`, `data-video-tail-log-clear`,
+	} {
+		if !strings.Contains(index, marker) {
+			t.Errorf("final fix C markup is missing %s", marker)
+		}
+	}
+
+	script := getBody(t, "/assets/videos.js")
+	for _, marker := range []string{
+		`function syncItemTimingControls()`, `function itemTimingOverride()`, `timing_override: itemTimingOverride()`,
+		`const tailLogViews = new Map()`, `const tailLogClearOffsets = new Map()`, `function receiveTailLogSnapshot`,
+		`function receiveTailLogChunk`, `function invalidateTailLogStream`, `function closeTailLogs()`,
+		`/tail-extractions/${encodeURIComponent(view.id)}/logs`, `openItemEditor(item.id, assetID)`,
+	} {
+		if !strings.Contains(script, marker) {
+			t.Errorf("final fix C script is missing %s", marker)
+		}
+	}
+	if strings.Contains(script, `/tail-extractions/${encodeURIComponent(extractionID)}/logs/clear`) {
+		t.Error("Tail browser-only clear must not call a server clear endpoint")
+	}
+
+	section := func(start, end string) string {
+		t.Helper()
+		startAt := strings.Index(script, start)
+		if startAt < 0 {
+			t.Fatalf("final fix C section is missing %s", start)
+		}
+		endAt := strings.Index(script[startAt+len(start):], end)
+		if endAt < 0 {
+			t.Fatalf("final fix C section %s has no %s boundary", start, end)
+		}
+		return script[startAt : startAt+len(start)+endAt]
+	}
+
+	itemEditor := section("function openItemEditor", "function updateItemActions")
+	populateAt, syncAt, showAt := strings.Index(itemEditor, "item?.timing_override"), strings.Index(itemEditor, "syncItemTimingControls()"), strings.Index(itemEditor, "ui.itemDialog.showModal()")
+	if populateAt < 0 || syncAt < populateAt || showAt < syncAt {
+		t.Error("Item editor must populate and synchronize timing_override before showing the dialog")
+	}
+	itemTiming := section("function itemTimingOverride", "function itemPayload")
+	for _, marker := range []string{`return null`, `mode: "frames"`, `video_frames`, `mode: "duration"`, `duration_seconds`, `fps`, `Math.ceil`} {
+		if !strings.Contains(itemTiming, marker) {
+			t.Errorf("Item timing payload is incomplete: missing %s", marker)
+		}
+	}
+	if strings.Contains(itemTiming, "requestedFrames > 100000") {
+		t.Error("duration overrides must not apply the frames-mode 100000 cap to ceil(duration*fps)")
+	}
+	itemPayload := section("function itemPayload", "async function saveItem")
+	if timingAt, returnAt := strings.Index(itemPayload, "timing_override: itemTimingOverride()"), strings.Index(itemPayload, "return {"); timingAt < 0 || returnAt < 0 || timingAt < returnAt {
+		t.Error("browser Item payload must explicitly serialize null or a complete timing_override")
+	}
+
+	tailSnapshot := section("function receiveTailLogSnapshot", "function receiveTailLogChunk")
+	validationAt, mutationAt := strings.Index(tailSnapshot, "if (!validLogSnapshot"), strings.Index(tailSnapshot, "view.startOffset = startOffset")
+	if validationAt < 0 || mutationAt < 0 || validationAt > mutationAt || !strings.Contains(tailSnapshot[:mutationAt], "invalidateTailLogStream") {
+		t.Error("Tail log snapshots must reject malformed absolute offsets before mutating the view")
+	}
+	tailChunk := section("function receiveTailLogChunk", "function connectTailLog")
+	gapAt, mutationAt := strings.Index(tailChunk, "startOffset > view.endOffset"), strings.Index(tailChunk, "view.bytes = appendBytes")
+	if gapAt < 0 || mutationAt < 0 || gapAt > mutationAt || !strings.Contains(tailChunk[:mutationAt], "invalidateTailLogStream") {
+		t.Error("Tail log gaps must invalidate and reconnect before any byte mutation")
+	}
+	tailClear := section("function clearTailLogLocally", "function renderTailHistory")
+	clearAt, rememberAt, renderAt := strings.Index(tailClear, "view.clearOffset = view.endOffset"), strings.Index(tailClear, "tailLogClearOffsets.set"), strings.Index(tailClear, "renderTailLog(view)")
+	if clearAt < 0 || rememberAt < clearAt || renderAt < rememberAt || strings.Contains(tailClear, "request(") {
+		t.Error("Tail log clear must advance and remember only the browser offset before rerendering")
+	}
+	renderResults := section("function renderResults", "async function setAssetState")
+	closeAt, replaceAt := strings.Index(renderResults, "closeTailLogs()"), strings.Index(renderResults, "ui.resultList.replaceChildren()")
+	if closeAt < 0 || replaceAt < 0 || closeAt > replaceAt {
+		t.Error("Tail log EventSources and timers must close before result history is replaced")
+	}
+	leave := section("function leave()", "ui.batchForm.addEventListener")
+	if !strings.Contains(leave, "closeTailLogs();") || !strings.Contains(leave, "clearTimers();") {
+		t.Error("workspace leave must close Tail log EventSources and reconnect timers")
+	}
+
+	currentTarget := section("async function useTailAsCurrentItem", "async function ensureAssetActive")
+	activateAt, draftAt := strings.Index(currentTarget, "await ensureAssetActive(assetID)"), strings.Index(currentTarget, "openItemEditor(item.id, assetID)")
+	if !strings.Contains(currentTarget, "window.confirm") || !strings.Contains(currentTarget, "itemTargetName(item)") || activateAt < 0 || draftAt < activateAt {
+		t.Error("Tail reuse must name and confirm its target, activate the Asset, then open that Item draft")
+	}
+	if strings.Contains(currentTarget, `jsonOptions("PUT"`) {
+		t.Error("Tail reuse must not silently PUT the stale editingItemID target")
+	}
+
+	styles := getBody(t, "/assets/styles.css")
+	for _, marker := range []string{`.video-item-timing-layout`, `.video-tail-log`, `.video-tail-log-status`} {
+		if !strings.Contains(styles, marker) {
+			t.Errorf("final fix C styles are missing %s", marker)
+		}
 	}
 }
 

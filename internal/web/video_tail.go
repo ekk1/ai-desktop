@@ -36,6 +36,8 @@ func (h videoTailHandler) serve(w http.ResponseWriter, r *http.Request) {
 		h.cancel(w, r, s[0])
 	case len(s) == 2 && s[1] == "events":
 		h.events(w, r, s[0])
+	case len(s) == 2 && s[1] == "logs":
+		h.logs(w, r, s[0])
 	case len(s) == 3 && s[1] == "logs" && s[2] == "save":
 		h.saveLog(w, r, s[0])
 	default:
@@ -144,6 +146,53 @@ func (h videoTailHandler) events(w http.ResponseWriter, r *http.Request, id stri
 			}
 			flush.Flush()
 		case <-ticker.C:
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			flush.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+func (h videoTailHandler) logs(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return
+	}
+	flush, ok := w.(http.Flusher)
+	if !ok {
+		writeAPIError(w, 500, "stream_unavailable", "streaming is unavailable")
+		return
+	}
+	snapshot, chunks, unsub, err := h.extractor.SubscribeLog(id)
+	if err != nil {
+		writeVideoAPIError(w, err)
+		return
+	}
+	defer unsub()
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+	if writeVideoLogSnapshot(w, snapshot) != nil {
+		return
+	}
+	flush.Flush()
+	interval := h.heartbeat
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	heartbeat := time.NewTicker(interval)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case chunk, ok := <-chunks:
+			if !ok || writeVideoLogChunk(w, chunk.Offset, chunk.Data) != nil {
+				return
+			}
+			flush.Flush()
+		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
 				return
 			}

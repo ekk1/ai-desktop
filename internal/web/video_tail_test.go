@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -283,4 +284,179 @@ func TestVideoTailSSESaveAssetSelectionAndCancelContract(t *testing.T) {
 	if err := json.NewDecoder(cancelResponse.Body).Decode(&cancelled); cancelResponse.Code != http.StatusAccepted || err != nil || cancelled.ID != cancelCreated.ID || cancelled.State != videogen.AttemptCancelled || cancelled.CompletedAt == nil {
 		t.Fatalf("tail cancel status=%d body=%s decode=%v cancelled=%#v", cancelResponse.Code, cancelResponse.Body.String(), err, cancelled)
 	}
+}
+
+func TestVideoTailLogSSEUsesRawOffsetsHeartbeatAndRequestCancellation(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := config.OpenRepository(filepath.Join(root, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	videos := cfg.Snapshot().Videos
+	videos.TailFramePresets = []videoconfig.TailFramePreset{{
+		ID: "tail-raw-log", Name: "Tail Raw Log", Enabled: true,
+		CommandTemplate: "while [ ! -f $(dirname {{OUTPUT_IMAGE}})/../release ]; do sleep 0.01; done; printf 'tail-\\377-log'; printf '\\x89PNG\\r\\n\\x1a\\n' > {{OUTPUT_IMAGE}}",
+		TimeoutSeconds:  2, StopGraceSeconds: 0, MaxImageBytes: 1024, OutputExtension: ".png",
+	}}
+	if _, err := cfg.UpdateVideos(videos); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := asset.OpenRepository(filepath.Join(root, "assets.json"), filepath.Join(root, "files"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := assets.Import(asset.ImportInput{Reader: bytes.NewBufferString("video-source"), DisplayName: "source.webm", MediaType: "video/webm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := videogen.OpenTailRepository(filepath.Join(root, "videos", "tail-extractions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := videogen.NewCLIExecutor()
+	extractor := videogen.NewTailExtractor(cfg, repository, assets, executor, filepath.Join(root, "video-workspace"), filepath.Join(root, "videos", "tail-logs"))
+	defer executor.Shutdown(context.Background())
+	defer extractor.Shutdown(context.Background())
+	handler := videoTailHandler{extractor: extractor, repository: repository, heartbeat: 5 * time.Millisecond}
+
+	created, err := extractor.Extract(context.Background(), source.ID, "tail-raw-log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		status, statusErr := executor.Status(created.ID)
+		if statusErr == nil && status.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tail extraction did not start: status=%#v err=%v", status, statusErr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	for _, check := range []struct {
+		name   string
+		method string
+		path   string
+		status int
+	}{
+		{"invalid ID", http.MethodGet, "/api/v1/videos/tail-extractions/not-an-id/logs", http.StatusNotFound},
+		{"missing extraction", http.MethodGet, "/api/v1/videos/tail-extractions/ffffffffffffffffffffffffffffffff/logs", http.StatusNotFound},
+		{"wrong method", http.MethodPost, "/api/v1/videos/tail-extractions/" + created.ID + "/logs", http.StatusMethodNotAllowed},
+	} {
+		recorder := httptest.NewRecorder()
+		handler.serve(recorder, httptest.NewRequest(check.method, check.path, nil))
+		if recorder.Code != check.status {
+			t.Fatalf("%s status=%d body=%s, want %d", check.name, recorder.Code, recorder.Body.String(), check.status)
+		}
+	}
+
+	handlerDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		handler.serve(w, r)
+	}))
+	defer server.Close()
+	streamContext, cancelStream := context.WithTimeout(context.Background(), 2*time.Second)
+	request, err := http.NewRequestWithContext(streamContext, http.MethodGet, server.URL+"/api/v1/videos/tail-extractions/"+created.ID+"/logs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	eventName, data, heartbeat := readVideoSSEFrame(t, reader)
+	var snapshot struct {
+		StartOffset int64  `json:"start_offset"`
+		EndOffset   int64  `json:"end_offset"`
+		DataBase64  string `json:"data_base64"`
+	}
+	if eventName != "snapshot" || heartbeat || json.Unmarshal(data, &snapshot) != nil || snapshot.StartOffset != 0 || snapshot.EndOffset != 0 || snapshot.DataBase64 != "" {
+		t.Fatalf("snapshot event=%q heartbeat=%v data=%s decoded=%#v", eventName, heartbeat, data, snapshot)
+	}
+	if err := os.WriteFile(filepath.Join(root, "video-workspace", "tail-"+created.ID, "release"), []byte("go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantLog := []byte{'t', 'a', 'i', 'l', '-', 0xff, '-', 'l', 'o', 'g'}
+	foundChunk, foundHeartbeat := false, false
+	for !foundChunk || !foundHeartbeat {
+		eventName, data, heartbeat = readVideoSSEFrame(t, reader)
+		if heartbeat {
+			foundHeartbeat = true
+			continue
+		}
+		if eventName != "chunk" {
+			t.Fatalf("log event=%q data=%s", eventName, data)
+		}
+		var chunk struct {
+			StartOffset int64  `json:"start_offset"`
+			DataBase64  string `json:"data_base64"`
+		}
+		if err := json.Unmarshal(data, &chunk); err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(chunk.DataBase64)
+		if err != nil || chunk.StartOffset != 0 || !bytes.Equal(decoded, wantLog) {
+			t.Fatalf("chunk=%#v decoded=%v decode=%v, want offset=0 data=%v", chunk, decoded, err, wantLog)
+		}
+		foundChunk = true
+	}
+	cancelStream()
+	_ = response.Body.Close()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("tail log SSE handler did not return after request context cancellation")
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for {
+		terminal, ok := repository.Get(created.ID)
+		if ok && terminal.State == videogen.AttemptSucceeded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tail extraction did not reach succeeded after log stream: %#v", terminal)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(root, "video-workspace", "tail-"+created.ID)); !os.IsNotExist(err) {
+		t.Fatalf("terminal Tail workspace still exists or could not be checked: %v", err)
+	}
+
+	terminalDone := make(chan struct{})
+	terminalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(terminalDone)
+		handler.serve(w, r)
+	}))
+	terminalContext, cancelTerminal := context.WithCancel(context.Background())
+	terminalRequest, err := http.NewRequestWithContext(terminalContext, http.MethodGet, terminalServer.URL+"/api/v1/videos/tail-extractions/"+created.ID+"/logs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalResponse, err := http.DefaultClient.Do(terminalRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalReader := bufio.NewReader(terminalResponse.Body)
+	eventName, data, heartbeat = readVideoSSEFrame(t, terminalReader)
+	if eventName != "snapshot" || heartbeat || json.Unmarshal(data, &snapshot) != nil {
+		t.Fatalf("terminal snapshot event=%q heartbeat=%v data=%s decoded=%#v", eventName, heartbeat, data, snapshot)
+	}
+	decodedSnapshot, err := base64.StdEncoding.DecodeString(snapshot.DataBase64)
+	if err != nil || snapshot.StartOffset != 0 || snapshot.EndOffset != int64(len(wantLog)) || !bytes.Equal(decodedSnapshot, wantLog) {
+		t.Fatalf("terminal snapshot=%#v decoded=%v decode=%v, want offsets=0-%d data=%v", snapshot, decodedSnapshot, err, len(wantLog), wantLog)
+	}
+	cancelTerminal()
+	_ = terminalResponse.Body.Close()
+	select {
+	case <-terminalDone:
+	case <-time.After(time.Second):
+		t.Fatal("terminal Tail log SSE handler did not unsubscribe after request cancellation")
+	}
+	terminalServer.Close()
 }

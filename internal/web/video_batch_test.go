@@ -199,3 +199,31 @@ func TestVideoBatchAndItemAPIContract(t *testing.T) {
 		t.Fatalf("invalid route status=%d body=%s", invalidID.Code, invalidID.Body.String())
 	}
 }
+
+func TestVideoItemTimingOverrideRoundTripsThroughUnrelatedUpdate(t *testing.T) {
+	fixture := newVideoAttemptFixture(t)
+	defer fixture.manager.Shutdown(context.Background())
+	batch, err := fixture.service.CreateBatch(videogen.CreateBatchInput{
+		Title: "timing round trip", ExecutionKind: "http", PresetID: "sdcpp-video-local", Concurrency: 1,
+		CommonParams: json.RawMessage(`{}`), Timing: videogen.TimingInput{Mode: "frames", VideoFrames: 49, FPS: 12},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := fixture.request(http.MethodPost, "/api/v1/videos/batches/"+batch.ID+"/items", []byte(`{"items":[{"prompt":"before","negative_prompt":"","enabled":true,"params_override":{},"timing_override":{"mode":"duration","duration_seconds":1.25,"fps":24},"control_frame_ids":[],"selected_assets":[]}]}`))
+	var body struct {
+		Items []videogen.Item `json:"items"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&body); created.Code != http.StatusCreated || err != nil || len(body.Items) != 1 {
+		t.Fatalf("create status=%d body=%s decode=%v", created.Code, created.Body.String(), err)
+	}
+	item := body.Items[0]
+	updated := fixture.request(http.MethodPut, "/api/v1/videos/batches/"+batch.ID+"/items/"+item.ID, []byte(`{"prompt":"after","negative_prompt":"","enabled":true,"params_override":{},"timing_override":{"mode":"duration","duration_seconds":1.25,"fps":24},"control_frame_ids":[],"selected_assets":[]}`))
+	var got videogen.Item
+	if err := json.NewDecoder(updated.Body).Decode(&got); updated.Code != http.StatusOK || err != nil {
+		t.Fatalf("update status=%d body=%s decode=%v", updated.Code, updated.Body.String(), err)
+	}
+	if got.Prompt != "after" || got.TimingOverride == nil || got.TimingOverride.Mode != "duration" || got.TimingOverride.DurationSeconds != 1.25 || got.TimingOverride.FPS != 24 {
+		t.Fatalf("unrelated edit lost duration timing override: %#v", got)
+	}
+}

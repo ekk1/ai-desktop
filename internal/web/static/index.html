@@ -296,6 +296,19 @@
             </div>
           </article>
         </template>
+        <template id="video-tail-history-template">
+          <details class="video-tail-history-row">
+            <summary data-video-tail-log-summary></summary>
+            <div class="video-tail-log-panel">
+              <div class="button-row">
+                <button type="button" class="text-button" data-video-tail-log-clear>浏览器清屏</button>
+                <button type="button" class="text-button" data-video-tail-log-save>保存本次日志</button>
+              </div>
+              <pre class="video-tail-log" data-video-tail-log></pre>
+              <p class="video-tail-log-status" data-video-tail-log-status></p>
+            </div>
+          </details>
+        </template>
 
         <section class="backend-workspace" id="backend-workspace" hidden>
           <div class="backend-toolbar">
@@ -951,6 +964,21 @@
         <label class="full-width">Negative Prompt <textarea id="video-item-negative" rows="4"></textarea></label>
         <label class="checkbox-field"><input id="video-item-enabled" type="checkbox" checked> 启用此项</label>
       </div>
+      <fieldset class="video-item-timing">
+        <legend>Timing 覆盖</legend>
+        <div class="video-item-timing-layout">
+          <fieldset class="video-timing-mode">
+            <legend>Timing 模式</legend>
+            <label class="checkbox-field"><input id="video-item-timing-inherit" name="video-item-timing-mode" type="radio" value="inherit" checked> 继承 Batch</label>
+            <label class="checkbox-field"><input id="video-item-timing-frames" name="video-item-timing-mode" type="radio" value="frames"> 指定帧数</label>
+            <label class="checkbox-field"><input id="video-item-timing-duration" name="video-item-timing-mode" type="radio" value="duration"> 指定时长</label>
+          </fieldset>
+          <label data-video-item-timing-field="frames">请求帧数 <input id="video-item-frame-count" type="number" min="1" max="100000" value="49" required></label>
+          <label data-video-item-timing-field="duration" hidden>时长（秒） <input id="video-item-duration-seconds" type="number" min="0.001" max="86400" step="0.001" value="4" required></label>
+          <label data-video-item-timing-field="override">FPS <input id="video-item-fps" type="number" min="1" max="240" value="12" required></label>
+          <output id="video-item-requested-frames">继承 Batch Timing。</output>
+        </div>
+      </fieldset>
       <details>
         <summary>单项 JSON 参数覆盖</summary>
         <label>JSON Object <textarea id="video-item-override" rows="10" spellcheck="false">{}</textarea></label>

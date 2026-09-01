@@ -36,6 +36,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     bulkOpen: document.querySelector("#video-bulk-open"),
     resultList: document.querySelector("#video-result-list"),
     resultTemplate: document.querySelector("#video-result-template"),
+    tailHistoryTemplate: document.querySelector("#video-tail-history-template"),
     tailPreset: document.querySelector("#video-tail-preset"),
     createDialog: document.querySelector("#video-batch-editor"),
     createForm: document.querySelector("#video-batch-create-form"),
@@ -55,6 +56,13 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     itemPrompt: document.querySelector("#video-item-prompt"),
     itemNegative: document.querySelector("#video-item-negative"),
     itemEnabled: document.querySelector("#video-item-enabled"),
+    itemTimingInherit: document.querySelector("#video-item-timing-inherit"),
+    itemTimingFrames: document.querySelector("#video-item-timing-frames"),
+    itemTimingDuration: document.querySelector("#video-item-timing-duration"),
+    itemFrameCount: document.querySelector("#video-item-frame-count"),
+    itemDuration: document.querySelector("#video-item-duration-seconds"),
+    itemFPS: document.querySelector("#video-item-fps"),
+    itemRequestedFrames: document.querySelector("#video-item-requested-frames"),
     itemOverride: document.querySelector("#video-item-override"),
     itemError: document.querySelector("#video-item-error"),
     cliAssets: document.querySelector("#video-item-cli-assets"),
@@ -97,6 +105,9 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   const assetCache = new Map();
   const tailExtractionsBySource = new Map();
   const tailEventSources = new Map();
+  const tailLogViews = new Map();
+  const tailLogClearOffsets = new Map();
+  let tailLogViewSequence = 0;
   const timers = new Set();
 
   let logEventSource = null;
@@ -234,6 +245,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
 
   function commitBatchSelection(batchID, loaded) {
     selectedBatchID = batchID;
+    editingItemID = "";
     detail = loaded;
     detailRefreshPending = false;
     batchDraftDirty = false;
@@ -255,6 +267,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       closeAttemptLog();
       closeTailEvents();
       selectedBatchID = "";
+      editingItemID = "";
       detail = null;
       batchDraftDirty = false;
       renderBatchList();
@@ -315,6 +328,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     if (!batch) {
       ui.batchForm.hidden = true;
       ui.itemList.replaceChildren();
+      closeTailLogs();
       ui.resultList.replaceChildren();
       setStatus("选择或新建视频批次。");
       return;
@@ -459,7 +473,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     if (!prompts.length) { ui.bulkError.textContent = "至少输入一个非空 Prompt。"; return; }
     try {
       const body = await request(`/api/v1/videos/batches/${encodeURIComponent(selectedBatchID)}/items`, jsonOptions("POST", {
-        items: prompts.map((prompt) => ({ prompt, negative_prompt: "", enabled: true, params_override: {}, control_frame_ids: [], selected_assets: [] })),
+        items: prompts.map((prompt) => ({ prompt, negative_prompt: "", enabled: true, params_override: {}, timing_override: null, control_frame_ids: [], selected_assets: [] })),
       }));
       ui.bulkDialog.close();
       for (const item of body.items ?? []) detail.batch.items.push(item);
@@ -538,11 +552,19 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
 
   function openItemEditor(itemID = "", initialAssetID = "") {
     const item = findItem(itemID);
+    const itemTiming = item?.timing_override;
+    const effectiveTiming = itemTiming ?? detail?.batch.timing ?? defaultTiming;
     editingItemID = item?.id || "";
     ui.itemID.value = editingItemID;
     ui.itemPrompt.value = item?.prompt || "";
     ui.itemNegative.value = item?.negative_prompt || "";
     ui.itemEnabled.checked = item?.enabled ?? true;
+    ui.itemTimingInherit.checked = !itemTiming;
+    ui.itemTimingFrames.checked = itemTiming?.mode === "frames";
+    ui.itemTimingDuration.checked = itemTiming?.mode === "duration";
+    ui.itemFrameCount.value = String(effectiveTiming.video_frames || detail?.batch.timing?.video_frames || defaultTiming.video_frames);
+    ui.itemDuration.value = String(effectiveTiming.duration_seconds || detail?.batch.timing?.duration_seconds || 4);
+    ui.itemFPS.value = String(effectiveTiming.fps || detail?.batch.timing?.fps || defaultTiming.fps);
     ui.itemOverride.value = JSON.stringify(item?.params_override ?? {}, null, 2);
     imageAssetDraft = {
       init_image_id: initialAssetID || item?.init_image_id || "",
@@ -553,6 +575,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     reindexCLIAssets();
     ui.itemError.textContent = "";
     ui.cliPath.textContent = "";
+    syncItemTimingControls();
     renderItemAssets();
     renderAttemptHistory(item);
     updateItemActions(item);
@@ -721,6 +744,47 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     };
   }
 
+  function syncItemTimingControls() {
+    const mode = ui.itemTimingDuration.checked ? "duration" : (ui.itemTimingFrames.checked ? "frames" : "inherit");
+    for (const field of document.querySelectorAll("[data-video-item-timing-field]")) {
+      const fieldMode = field.dataset.videoItemTimingField;
+      const visible = fieldMode === mode || (fieldMode === "override" && mode !== "inherit");
+      field.hidden = !visible;
+      const control = field.querySelector("input");
+      if (control) control.disabled = !visible;
+    }
+    const timing = mode === "inherit" ? (detail?.batch.timing ?? defaultTiming) : {
+      mode,
+      video_frames: Number(ui.itemFrameCount.value),
+      duration_seconds: Number(ui.itemDuration.value),
+      fps: Number(ui.itemFPS.value),
+    };
+    const fps = Math.max(0, Number(timing.fps) || 0);
+    const requested = timing.mode === "duration"
+      ? Math.ceil(Math.max(0, Number(timing.duration_seconds) || 0) * fps)
+      : Math.max(0, Number(timing.video_frames) || 0);
+    ui.itemRequestedFrames.textContent = `${mode === "inherit" ? "继承 Batch：" : ""}请求 ${requested} 帧；实际帧数由结果决定。`;
+  }
+
+  function itemTimingOverride() {
+    if (ui.itemTimingInherit.checked) return null;
+    const fps = Number(ui.itemFPS.value);
+    if (!Number.isSafeInteger(fps) || fps < 1 || fps > 240) throw new Error("单项 Timing FPS 必须是 1–240 的整数。");
+    if (ui.itemTimingFrames.checked) {
+      const videoFrames = Number(ui.itemFrameCount.value);
+      if (!Number.isSafeInteger(videoFrames) || videoFrames < 1 || videoFrames > 100000) {
+        throw new Error("单项请求帧数必须是 1–100000 的整数。");
+      }
+      return { mode: "frames", video_frames: videoFrames, fps };
+    }
+    const durationSeconds = Number(ui.itemDuration.value);
+    const requestedFrames = Math.ceil(durationSeconds * fps);
+    if (!Number.isFinite(durationSeconds) || durationSeconds < 0.001 || durationSeconds > 86400 || !Number.isSafeInteger(requestedFrames)) {
+      throw new Error("单项时长必须是 0.001–86400 秒。");
+    }
+    return { mode: "duration", duration_seconds: durationSeconds, fps };
+  }
+
   function itemPayload() {
     const params = parseObject(ui.itemOverride.value, "Params Override");
     const selectedAssets = clone(cliAssetDraft);
@@ -729,7 +793,8 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     }
     return {
       prompt: ui.itemPrompt.value, negative_prompt: ui.itemNegative.value, enabled: ui.itemEnabled.checked,
-      params_override: params, init_image_id: imageAssetDraft.init_image_id, end_image_id: imageAssetDraft.end_image_id,
+      params_override: params, timing_override: itemTimingOverride(),
+      init_image_id: imageAssetDraft.init_image_id, end_image_id: imageAssetDraft.end_image_id,
       control_frame_ids: clone(imageAssetDraft.control_frame_ids), selected_assets: selectedAssets,
     };
   }
@@ -1138,6 +1203,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   }
 
   function renderResults() {
+    closeTailLogs();
     ui.resultList.replaceChildren();
     const available = results();
     if (!available.length) {
@@ -1200,6 +1266,119 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     return history[history.length - 1] ?? null;
   }
 
+  function renderTailLog(view) {
+    const visibleOffset = Math.max(view.clearOffset, view.startOffset);
+    const start = Math.min(view.bytes.length, Math.max(0, visibleOffset - view.startOffset));
+    view.log.textContent = logDecoder.decode(view.bytes.slice(start));
+  }
+
+  function stopTailLogView(view) {
+    if (view.source) view.source.close();
+    view.source = null;
+    if (view.reconnectTimer !== null) {
+      window.clearTimeout(view.reconnectTimer);
+      timers.delete(view.reconnectTimer);
+      view.reconnectTimer = null;
+    }
+  }
+
+  function closeTailLogs() {
+    for (const view of tailLogViews.values()) stopTailLogView(view);
+    tailLogViews.clear();
+  }
+
+  function scheduleTailLogReconnect(view) {
+    if (view.reconnectTimer !== null || tailLogViews.get(view.key) !== view) return;
+    const delay = view.reconnectDelay;
+    view.reconnectDelay = Math.min(view.reconnectDelay * 2, 5000);
+    view.reconnectTimer = window.setTimeout(() => {
+      const timer = view.reconnectTimer;
+      view.reconnectTimer = null;
+      timers.delete(timer);
+      if (active && view.details.open && tailLogViews.get(view.key) === view) connectTailLog(view);
+    }, delay);
+    timers.add(view.reconnectTimer);
+  }
+
+  function invalidateTailLogStream(view, message) {
+    view.awaitingSnapshot = true;
+    if (view.source) view.source.close();
+    view.source = null;
+    view.status.textContent = message;
+    scheduleTailLogReconnect(view);
+  }
+
+  function receiveTailLogSnapshot(view, payload) {
+    const bytes = base64Bytes(payload.data_base64);
+    const startOffset = Number(payload.start_offset);
+    const endOffset = Number(payload.end_offset);
+    if (!validLogSnapshot(startOffset, endOffset, bytes.length)) {
+      invalidateTailLogStream(view, "日志快照 offset 或字节长度无效；已丢弃并重新订阅权威快照。");
+      return;
+    }
+    view.startOffset = startOffset;
+    view.endOffset = endOffset;
+    view.bytes = bytes;
+    view.awaitingSnapshot = false;
+    view.reconnectDelay = 250;
+    view.status.textContent = `显示绝对 offset ${startOffset}–${endOffset}；清屏仅影响当前浏览器。`;
+    renderTailLog(view);
+  }
+
+  function receiveTailLogChunk(view, payload) {
+    if (view.awaitingSnapshot) return;
+    const bytes = base64Bytes(payload.data_base64);
+    const startOffset = Number(payload.start_offset);
+    if (!Number.isSafeInteger(startOffset) || startOffset < 0) {
+      invalidateTailLogStream(view, "Tail 日志 chunk offset 无效；已丢弃并重新订阅权威快照。");
+      return;
+    }
+    const chunkEnd = startOffset + bytes.length;
+    if (!Number.isSafeInteger(chunkEnd)) {
+      invalidateTailLogStream(view, "Tail 日志 chunk 长度超出安全 offset 范围；已丢弃并重新订阅权威快照。");
+      return;
+    }
+    if (chunkEnd <= view.endOffset) return;
+    if (startOffset > view.endOffset) {
+      invalidateTailLogStream(view, "Tail 日志出现字节缺口；已丢弃该 chunk 并重新订阅权威快照。");
+      return;
+    }
+    const overlap = Math.max(0, view.endOffset - startOffset);
+    view.bytes = appendBytes(view.bytes, bytes.slice(overlap));
+    view.endOffset = chunkEnd;
+    renderTailLog(view);
+  }
+
+  function connectTailLog(view) {
+    if (!active || !view.details.open || tailLogViews.get(view.key) !== view || view.source) return;
+    view.awaitingSnapshot = true;
+    const source = new EventSource(`/api/v1/videos/tail-extractions/${encodeURIComponent(view.id)}/logs`);
+    view.source = source;
+    source.addEventListener("snapshot", (event) => {
+      if (view.source !== source || tailLogViews.get(view.key) !== view) return;
+      try { receiveTailLogSnapshot(view, JSON.parse(event.data)); }
+      catch (error) { invalidateTailLogStream(view, `Tail 日志快照解析失败，已重新订阅：${error.message}`); }
+    });
+    source.addEventListener("chunk", (event) => {
+      if (view.source !== source || tailLogViews.get(view.key) !== view) return;
+      try { receiveTailLogChunk(view, JSON.parse(event.data)); }
+      catch (error) { invalidateTailLogStream(view, `Tail 日志字节解析失败，已重新订阅：${error.message}`); }
+    });
+    source.onerror = () => {
+      if (active && view.source === source && tailLogViews.get(view.key) === view) {
+        view.awaitingSnapshot = true;
+        view.status.textContent = "Tail 日志流暂时断开；浏览器重连后会等待新的权威快照。";
+      }
+    };
+  }
+
+  function clearTailLogLocally(view) {
+    view.clearOffset = view.endOffset;
+    tailLogClearOffsets.set(view.id, view.clearOffset);
+    renderTailLog(view);
+    view.status.textContent = "仅清除了当前浏览器显示；服务端原始 Tail 日志保持不变。";
+  }
+
   function renderTailHistory(container, history) {
     container.replaceChildren();
     if (!history.length) {
@@ -1207,13 +1386,34 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       return;
     }
     for (const extraction of [...history].reverse()) {
-      const row = document.createElement("div");
-      row.className = "video-tail-history-row";
-      const summary = document.createElement("span");
+      const row = ui.tailHistoryTemplate.content.firstElementChild.cloneNode(true);
+      const summary = row.querySelector("[data-video-tail-log-summary]");
       const error = extraction.error?.message ? ` · ${extraction.error.message}` : "";
       summary.textContent = `${new Date(extraction.created_at).toLocaleString()} · ${stateText(extraction.state)}${error}`;
-      const save = textButton("保存本次日志", "text-button", () => saveTailLog(extraction.id));
-      row.append(summary, save);
+      const view = {
+        key: `${extraction.id}:${++tailLogViewSequence}`,
+        id: extraction.id,
+        details: row,
+        log: row.querySelector("[data-video-tail-log]"),
+        status: row.querySelector("[data-video-tail-log-status]"),
+        source: null,
+        reconnectTimer: null,
+        reconnectDelay: 250,
+        awaitingSnapshot: true,
+        bytes: new Uint8Array(),
+        startOffset: 0,
+        endOffset: 0,
+        clearOffset: tailLogClearOffsets.get(extraction.id) ?? 0,
+      };
+      view.log.textContent = "展开后读取本次提取的原始日志。";
+      view.status.textContent = "日志使用 Base64 原始字节与绝对 offset。";
+      tailLogViews.set(view.key, view);
+      row.querySelector("[data-video-tail-log-clear]").addEventListener("click", () => clearTailLogLocally(view));
+      row.querySelector("[data-video-tail-log-save]").addEventListener("click", () => saveTailLog(extraction.id));
+      row.addEventListener("toggle", () => {
+        if (row.open) connectTailLog(view);
+        else stopTailLogView(view);
+      });
       container.append(row);
     }
   }
@@ -1232,10 +1432,12 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     }
     if (extraction?.state === "succeeded" && extraction.output_asset_id) {
       const tailAsset = assetCache.get(extraction.output_asset_id);
+      const targetName = itemTargetName(result.item);
       actions.append(
         textButton(tailAsset?.state === "active" ? "尾帧已精选" : "将尾帧设为精选", "text-button",
           () => setAssetState(extraction.output_asset_id, "active")),
-        textButton("作为当前项首帧", "text-button", () => useTailAsCurrentItem(extraction.output_asset_id)),
+        textButton(`设为${targetName}首帧（需保存）`, "text-button",
+          () => useTailAsCurrentItem(extraction.output_asset_id, result.item.id)),
         textButton("作为新项首帧", "text-button", () => useTailAsNewItem(extraction.output_asset_id)),
         textButton("保存提取日志", "text-button", () => saveTailLog(extraction.id)),
       );
@@ -1316,18 +1518,23 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     tailEventSources.clear();
   }
 
-  async function useTailAsCurrentItem(assetID) {
-    const item = findItem();
-    if (!item) { setStatus("请先打开一个现有请求项，再把尾帧写为当前项首帧。", true); return; }
+  function itemTargetName(item) {
+    const prompt = (item?.prompt || "空 Prompt").trim();
+    const shortPrompt = prompt.length > 24 ? `${prompt.slice(0, 24)}…` : prompt;
+    return `第 ${(item?.order ?? 0) + 1} 项“${shortPrompt}”`;
+  }
+
+  async function useTailAsCurrentItem(assetID, itemID) {
+    const item = findItem(itemID);
+    if (!item) { setStatus("目标请求项已不存在；请刷新后重新选择。", true); return; }
+    const target = itemTargetName(item);
+    if (!window.confirm(`把这个尾帧填入${target}的首帧草稿？你仍需在编辑器中点击“保存请求项”。`)) return;
     try {
       await ensureAssetActive(assetID);
-      const updated = await request(`/api/v1/videos/batches/${encodeURIComponent(selectedBatchID)}/items/${encodeURIComponent(item.id)}`,
-        jsonOptions("PUT", storedItemPayload(item, { init_image_id: assetID })));
-      Object.assign(item, updated);
-      await refreshDetail();
-      setStatus("尾帧已写入当前请求项的首帧。");
+      openItemEditor(item.id, assetID);
+      setStatus(`尾帧已填入${target}的首帧草稿；确认其他字段后点击“保存请求项”。`);
     } catch (error) {
-      const message = `无法把尾帧设为当前项首帧：${error.message}`;
+      const message = `无法把尾帧填入${target}：${error.message}`;
       if (ui.itemDialog.open) ui.itemError.textContent = message;
       setStatus(message, true);
     }
@@ -1416,6 +1623,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     closeBatchEvents();
     closeAttemptLog();
     closeTailEvents();
+    closeTailLogs();
     clearTimers();
     for (const dialog of [ui.createDialog, ui.bulkDialog, ui.itemDialog]) if (dialog.open) dialog.close();
     ui.workspace.hidden = true;
@@ -1457,6 +1665,10 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   for (const control of [ui.timingFrames, ui.timingDuration, ui.frameCount, ui.duration, ui.fps]) {
     control.addEventListener("input", () => { syncTimingControls(); markBatchDraftDirty(); });
     control.addEventListener("change", () => { syncTimingControls(); markBatchDraftDirty(); });
+  }
+  for (const control of [ui.itemTimingInherit, ui.itemTimingFrames, ui.itemTimingDuration, ui.itemFrameCount, ui.itemDuration, ui.itemFPS]) {
+    control.addEventListener("input", syncItemTimingControls);
+    control.addEventListener("change", syncItemTimingControls);
   }
   ui.tailPreset.addEventListener("change", renderResults);
   for (const button of document.querySelectorAll("[data-video-workspace-close]")) {
