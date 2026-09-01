@@ -207,16 +207,40 @@ func TestManagerNaturalLeaderExitCleansRemainingProcessGroup(t *testing.T) {
 
 func TestManagerReadinessFailureCleansRemainingProcessGroup(t *testing.T) {
 	manager := NewManager("instance-test")
-	request := shellRequest("(trap '' TERM; while :; do sleep 1; done) & exit 0")
-	request.Readiness = Readiness{Kind: ReadinessLogRegex, Pattern: "never", TimeoutSeconds: 2}
+	request := shellRequest("trap 'exit 0' TERM; (trap '' TERM; while :; do sleep 1; done) & while :; do sleep 1; done")
+	request.Readiness = Readiness{Kind: ReadinessLogRegex, Pattern: "never", TimeoutSeconds: 1}
 	run, err := manager.Start(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = syscall.Kill(-run.PID, syscall.SIGKILL) })
-	waitForRunState(t, manager, run.RunID, StateFailed)
+	failed := waitForRunState(t, manager, run.RunID, StateFailed)
+	if !strings.Contains(failed.Error, "readiness") {
+		t.Fatalf("error = %q, want readiness failure", failed.Error)
+	}
 	if err := syscall.Kill(-run.PID, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("process group %d still exists after readiness failure: %v", run.PID, err)
+	}
+}
+
+func TestManagerPropagatesProcessGroupCleanupFailure(t *testing.T) {
+	cleanupFailure := errors.New("injected process group cleanup failure")
+	manager := NewManager("instance-test")
+	manager.cleanupProcessGroup = func(int) error { return cleanupFailure }
+	run, err := manager.Start(context.Background(), shellRequest("exit 0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRunState(t, manager, run.RunID, StateStopped)
+
+	if _, err := manager.Stop(context.Background(), run.RunID); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("terminal Stop error = %v, want cleanup failure", err)
+	}
+	if err := manager.Shutdown(context.Background()); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("Shutdown error = %v, want cleanup failure", err)
+	}
+	if _, err := manager.Start(context.Background(), shellRequest("exit 0")); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("next Start error = %v, want cleanup failure", err)
 	}
 }
 

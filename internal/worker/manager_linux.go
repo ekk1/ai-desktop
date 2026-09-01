@@ -40,16 +40,18 @@ type managedProcess struct {
 }
 
 type Manager struct {
-	mu         sync.RWMutex
-	instanceID string
-	current    *managedProcess
-	httpClient *http.Client
+	mu                  sync.RWMutex
+	instanceID          string
+	current             *managedProcess
+	httpClient          *http.Client
+	cleanupProcessGroup func(int) error
 }
 
 func NewManager(instanceID string) *Manager {
 	return &Manager{
-		instanceID: instanceID,
-		httpClient: newLoopbackReadinessHTTPClient(net.DefaultResolver),
+		instanceID:          instanceID,
+		httpClient:          newLoopbackReadinessHTTPClient(net.DefaultResolver),
+		cleanupProcessGroup: ensureProcessGroupStopped,
 	}
 }
 
@@ -111,8 +113,13 @@ func (manager *Manager) Start(ctx context.Context, request StartRequest) (Run, e
 
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.current != nil && isActiveState(manager.current.run.State) {
-		return Run{}, ErrSlotBusy
+	if manager.current != nil {
+		if isActiveState(manager.current.run.State) {
+			return Run{}, ErrSlotBusy
+		}
+		if manager.current.cleanupErr != nil {
+			return Run{}, fmt.Errorf("previous worker process cleanup failed: %w", manager.current.cleanupErr)
+		}
 	}
 
 	logBuffer := NewLogBuffer(request.LogBufferBytes)
@@ -170,8 +177,9 @@ func (manager *Manager) Stop(ctx context.Context, runID string) (Run, error) {
 	}
 	if !isActiveState(process.run.State) {
 		run := manager.runWithLogOffsetsLocked(process)
+		cleanupErr := process.cleanupErr
 		manager.mu.Unlock()
-		return run, nil
+		return run, cleanupErr
 	}
 	process.stopRequested = true
 	process.run.State = StateStopping
@@ -251,9 +259,14 @@ func (manager *Manager) SubscribeLog(runID string) (LogSnapshot, <-chan LogChunk
 
 func (manager *Manager) Shutdown(ctx context.Context) error {
 	manager.mu.RLock()
-	if manager.current == nil || !isActiveState(manager.current.run.State) {
+	if manager.current == nil {
 		manager.mu.RUnlock()
 		return nil
+	}
+	if !isActiveState(manager.current.run.State) {
+		cleanupErr := manager.current.cleanupErr
+		manager.mu.RUnlock()
+		return cleanupErr
 	}
 	runID := manager.current.run.RunID
 	manager.mu.RUnlock()
@@ -266,7 +279,7 @@ func (manager *Manager) wait(process *managedProcess) {
 	if errors.Is(err, exec.ErrWaitDelay) && process.cmd.ProcessState.Success() {
 		err = nil
 	}
-	cleanupErr := ensureProcessGroupStopped(process.run.PID)
+	cleanupErr := manager.cleanupProcessGroup(process.run.PID)
 	endedAt := time.Now().UTC()
 	exitCode := process.cmd.ProcessState.ExitCode()
 
