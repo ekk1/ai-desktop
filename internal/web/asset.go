@@ -263,8 +263,28 @@ func (handler assetHandler) content(response http.ResponseWriter, request *http.
 	}
 	defer file.Close()
 	response.Header().Set("Content-Type", item.MediaType)
-	response.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": item.DisplayName}))
+	response.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	disposition := "attachment"
+	if assetMayRenderInline(item.MediaType) {
+		disposition = "inline"
+	}
+	response.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": item.DisplayName}))
 	http.ServeContent(response, request, item.DisplayName, item.UpdatedAt, file)
+}
+
+func assetMayRenderInline(mediaType string) bool {
+	parsed, _, err := mime.ParseMediaType(mediaType)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed) {
+	case "image/png", "image/jpeg", "image/gif", "image/webp",
+		"video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/avi",
+		"text/plain":
+		return true
+	default:
+		return false
+	}
 }
 
 func (handler assetHandler) decode(response http.ResponseWriter, request *http.Request, target any) bool {

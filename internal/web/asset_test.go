@@ -145,6 +145,12 @@ func TestAssetUploadStateMetadataAndContent(t *testing.T) {
 	if got := content.Header().Get("Content-Type"); got != "image/png" {
 		t.Fatalf("Content-Type = %q", got)
 	}
+	if got := content.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "inline;") {
+		t.Fatalf("Content-Disposition = %q, want inline", got)
+	}
+	if got := content.Header().Get("Content-Security-Policy"); got != "sandbox; default-src 'none'" {
+		t.Fatalf("Content-Security-Policy = %q", got)
+	}
 
 	deleted := doJSON(t, handler, http.MethodDelete, "/api/v1/assets/"+upload.ID, nil)
 	if deleted.Code != http.StatusNoContent {
@@ -152,6 +158,24 @@ func TestAssetUploadStateMetadataAndContent(t *testing.T) {
 	}
 	if len(repository.List(asset.Filter{})) != 0 {
 		t.Fatal("deleted asset remains in repository")
+	}
+}
+
+func TestAssetContentForcesActiveDocumentTypesToDownload(t *testing.T) {
+	handler, _ := newAssetHandler(t)
+	upload := uploadAsset(t, handler, "page.html", "text/html", []byte(`<script>fetch("/api/v1/settings")</script>`))
+
+	content := httptest.NewRecorder()
+	handler.ServeHTTP(content, httptest.NewRequest(http.MethodGet, "/api/v1/assets/"+upload.ID+"/content", nil))
+
+	if content.Code != http.StatusOK {
+		t.Fatalf("content status = %d: %s", content.Code, content.Body.String())
+	}
+	if got := content.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment;") {
+		t.Fatalf("Content-Disposition = %q, want attachment", got)
+	}
+	if got := content.Header().Get("Content-Security-Policy"); got != "sandbox; default-src 'none'" {
+		t.Fatalf("Content-Security-Policy = %q", got)
 	}
 }
 
