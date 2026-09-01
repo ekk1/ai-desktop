@@ -111,6 +111,72 @@ func TestServiceRestoresWorkspaceWhenReferencePersistenceFails(t *testing.T) {
 	assertPanelReference(t, assets, item.ID, panel.ID, true)
 }
 
+func TestDeleteSessionPreservesWorkspaceAndRunsWhenReferencePersistenceFails(t *testing.T) {
+	rootDirectory := t.TempDir()
+	assetDirectory := filepath.Join(rootDirectory, "assets")
+	assetIndex := filepath.Join(assetDirectory, "index.json")
+	assets, err := asset.OpenRepository(assetIndex, filepath.Join(assetDirectory, "files"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsRoot := filepath.Join(rootDirectory, "sessions")
+	repository, err := OpenRepository(sessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(repository, assets)
+	item := importAssetFixture(t, assets, "keep")
+	workspace, err := service.CreateSession(CreateSessionInput{Title: "S"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	panel, err := service.CreatePanel(workspace.Session.ID, CreatePanelInput{
+		ParentID: workspace.Panels[0].ID, Title: "P", Included: true, AssetIDs: []string{item.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPath := filepath.Join(sessionsRoot, workspace.Session.ID, "runs", "run.json")
+	if err := os.MkdirAll(filepath.Dir(runPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runPath, []byte(`{"run":"keep"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath := assetIndex + ".bak"
+	if err := os.Remove(backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(backupPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteSession(workspace.Session.ID); err == nil {
+		t.Fatal("DeleteSession succeeded while reference storage was unavailable")
+	}
+	if _, err := os.Stat(runPath); err != nil {
+		t.Fatalf("run disappeared after failed deletion: %v", err)
+	}
+	if _, exists := service.Get(workspace.Session.ID); !exists {
+		t.Fatal("workspace disappeared after failed deletion")
+	}
+	assertPanelReference(t, assets, item.ID, panel.ID, true)
+
+	if err := os.Remove(backupPath); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenRepository(sessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := reopened.Get(workspace.Session.ID); !exists {
+		t.Fatal("workspace was not reopenable after failed deletion")
+	}
+	if _, err := os.Stat(runPath); err != nil {
+		t.Fatalf("run was not preserved on disk: %v", err)
+	}
+}
+
 func TestServiceSynchronizesSubtreeForkAndRevisionReferences(t *testing.T) {
 	service, assets := newSessionServiceFixture(t)
 	first := importAssetFixture(t, assets, "first")

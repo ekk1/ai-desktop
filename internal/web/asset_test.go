@@ -179,6 +179,38 @@ func TestAssetContentForcesActiveDocumentTypesToDownload(t *testing.T) {
 	}
 }
 
+func TestAssetContentDispositionMatchesMediaRisk(t *testing.T) {
+	tests := []struct {
+		mediaType string
+		want      string
+	}{
+		{mediaType: "image/avif", want: "inline;"},
+		{mediaType: "image/bmp", want: "inline;"},
+		{mediaType: "audio/mpeg", want: "inline;"},
+		{mediaType: "IMAGE/AVIF; charset=binary", want: "inline;"},
+		{mediaType: "image/svg+xml", want: "attachment;"},
+		{mediaType: "text/html", want: "attachment;"},
+		{mediaType: "application/xhtml+xml", want: "attachment;"},
+	}
+	for _, test := range tests {
+		t.Run(test.mediaType, func(t *testing.T) {
+			handler, _ := newAssetHandler(t)
+			upload := uploadAsset(t, handler, "content.bin", test.mediaType, []byte("content"))
+			content := httptest.NewRecorder()
+			handler.ServeHTTP(content, httptest.NewRequest(http.MethodHead, "/api/v1/assets/"+upload.ID+"/content", nil))
+			if content.Code != http.StatusOK {
+				t.Fatalf("content status = %d", content.Code)
+			}
+			if got := content.Header().Get("Content-Disposition"); !strings.HasPrefix(got, test.want) {
+				t.Fatalf("Content-Disposition = %q, want prefix %q", got, test.want)
+			}
+			if content.Body.Len() != 0 {
+				t.Fatalf("HEAD returned %d body bytes", content.Body.Len())
+			}
+		})
+	}
+}
+
 func TestAssetAPIReportsReferencedDeleteConflict(t *testing.T) {
 	handler, repository := newAssetHandler(t)
 	upload := uploadAsset(t, handler, "note.txt", "text/plain", []byte("note"))

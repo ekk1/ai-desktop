@@ -61,6 +61,9 @@ func OpenRunStore(sessionsRoot string) (*RunStore, error) {
 				if document.SchemaVersion != runSchemaVersion || document.Run.ID != runID || document.Run.SessionID != sessionEntry.Name() {
 					return fmt.Errorf("run %q has invalid schema or identity", runID)
 				}
+				if _, duplicate := runStore.runs[runID]; duplicate {
+					return fmt.Errorf("duplicate run ID %q", runID)
+				}
 				return validateRun(document.Run)
 			}); err != nil {
 				return nil, fmt.Errorf("load run %q: %w", runID, err)

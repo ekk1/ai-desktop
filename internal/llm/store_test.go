@@ -1,9 +1,13 @@
 package llm
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	jsonstore "github.com/ekk1/ai-desktop/internal/store"
 )
 
 func TestRunStoreReopensActiveRunsAsInterrupted(t *testing.T) {
@@ -60,5 +64,38 @@ func TestRunStoreReturnsDeepCopiesAndNewestFirstSessionList(t *testing.T) {
 	listed := store.List("session")
 	if len(listed) != 2 || listed[0].ID != second.ID || listed[1].ID != first.ID {
 		t.Fatalf("listed runs = %#v", listed)
+	}
+}
+
+func TestRunStoreDoesNotRestoreBackupWithDuplicateRunID(t *testing.T) {
+	root := t.TempDir()
+	runStore, err := OpenRunStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := Run{ID: "run-duplicate", SessionID: "session-a", State: RunSucceeded, CreatedAt: time.Unix(1, 0).UTC(), CompletedAt: time.Unix(2, 0).UTC()}
+	second := first
+	second.SessionID = "session-b"
+	if err := runStore.Save(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := runStore.Save(second); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, second.SessionID, "runs", second.ID+".json")
+	if err := jsonstore.WriteJSON(path+".bak", runDocument{SchemaVersion: runSchemaVersion, Run: second}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte(`{"schema_version":1`)
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenRunStore(root); err == nil {
+		t.Fatal("run store accepted duplicate run IDs")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(contents, corrupt) {
+		t.Fatalf("primary = %q, error = %v; want corrupt primary left unchanged", contents, err)
 	}
 }

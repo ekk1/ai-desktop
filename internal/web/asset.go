@@ -278,7 +278,8 @@ func assetMayRenderInline(mediaType string) bool {
 		return false
 	}
 	switch strings.ToLower(parsed) {
-	case "image/png", "image/jpeg", "image/gif", "image/webp",
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp",
+		"audio/mpeg", "audio/ogg", "audio/wav", "audio/x-wav", "audio/mp4", "audio/webm", "audio/flac",
 		"video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/avi",
 		"text/plain":
 		return true

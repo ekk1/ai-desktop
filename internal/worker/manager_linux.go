@@ -188,7 +188,7 @@ func (manager *Manager) Stop(ctx context.Context, runID string) (Run, error) {
 	defer timer.Stop()
 	select {
 	case <-done:
-		return manager.currentRun(runID)
+		return manager.finalizeStoppedRun(runID, pid)
 	case <-ctx.Done():
 		return manager.killAndWait(runID, pid, done, ctx.Err())
 	case <-timer.C:
@@ -198,9 +198,10 @@ func (manager *Manager) Stop(ctx context.Context, runID string) (Run, error) {
 	}
 	select {
 	case <-done:
-		return manager.currentRun(runID)
+		return manager.finalizeStoppedRun(runID, pid)
 	case <-ctx.Done():
-		return manager.waitAfterKill(runID, done, ctx.Err())
+		run, waitErr := manager.waitAfterKill(runID, done, ctx.Err())
+		return run, errors.Join(waitErr, ensureProcessGroupStopped(pid))
 	}
 }
 
@@ -421,7 +422,12 @@ func (manager *Manager) killAndWait(runID string, pid int, done <-chan struct{},
 		killErr = nil
 	}
 	run, waitErr := manager.waitAfterKill(runID, done, prior)
-	return run, errors.Join(killErr, waitErr)
+	return run, errors.Join(killErr, waitErr, ensureProcessGroupStopped(pid))
+}
+
+func (manager *Manager) finalizeStoppedRun(runID string, pid int) (Run, error) {
+	run, runErr := manager.currentRun(runID)
+	return run, errors.Join(runErr, ensureProcessGroupStopped(pid))
 }
 
 func (manager *Manager) waitAfterKill(runID string, done <-chan struct{}, prior error) (Run, error) {
@@ -439,6 +445,35 @@ func signalProcessGroup(pid int, signal syscall.Signal) error {
 		return nil
 	}
 	return syscall.Kill(-pid, signal)
+}
+
+func ensureProcessGroupStopped(pid int) error {
+	err := signalProcessGroup(pid, 0)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect worker process group %d: %w", pid, err)
+	}
+	if err := signalProcessGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("kill remaining worker process group %d: %w", pid, err)
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := signalProcessGroup(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("inspect worker process group %d: %w", pid, err)
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			return fmt.Errorf("worker process group %d still exists after SIGKILL", pid)
+		}
+	}
 }
 
 func isActiveState(state RunState) bool {

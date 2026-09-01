@@ -1,9 +1,14 @@
 package knowledge
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/ekk1/ai-desktop/internal/store"
 )
 
 func TestRepositoryPersistsCRUDAndReturnsDeepCopies(t *testing.T) {
@@ -104,5 +109,28 @@ func TestRepositoryRequiresTitleButAllowsEmptyContent(t *testing.T) {
 	}
 	if created.Tags == nil || created.AssetIDs == nil {
 		t.Fatalf("empty collections = tags %#v, assets %#v; want non-nil empty slices", created.Tags, created.AssetIDs)
+	}
+}
+
+func TestRepositoryDoesNotRestoreInvalidKnowledgeBackup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.json")
+	now := time.Now().UTC()
+	invalid := document{SchemaVersion: schemaVersion, Notes: []Note{{
+		ID: "not-a-generated-id", Title: "", Tags: []string{}, AssetIDs: []string{}, CreatedAt: now, UpdatedAt: now,
+	}}}
+	if err := store.WriteJSON(path+".bak", invalid, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte(`{"schema_version":1`)
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenRepository(path); err == nil {
+		t.Fatal("repository restored an invalid knowledge backup")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(contents, corrupt) {
+		t.Fatalf("primary = %q, error = %v; want corrupt primary left unchanged", contents, err)
 	}
 }

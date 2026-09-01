@@ -180,6 +180,33 @@ func TestClientSubscribeLogsAllowsBase64ExpansionWithinDecodedLimit(t *testing.T
 	}
 }
 
+func TestClientSubscribeLogsRejectsDecodedEventOverLimit(t *testing.T) {
+	payload, err := json.Marshal(struct {
+		Offset int64  `json:"offset"`
+		Data   []byte `json:"data"`
+	}{Offset: 0, Data: bytes.Repeat([]byte{'x'}, 33)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(response, "event: snapshot\ndata: %s\n\n", payload)
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTPClient: server.Client(), MaxResponseBytes: 32}
+
+	events, failures, err := client.SubscribeLogs(context.Background(), "run-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event, open := <-events; open {
+		t.Fatalf("oversized event was delivered: %#v", event)
+	}
+	if failure := <-failures; !errors.Is(failure, ErrResponseTooLarge) {
+		t.Fatalf("stream error = %v, want ErrResponseTooLarge", failure)
+	}
+}
+
 func TestClientSubscribeLogsRejectsMalformedEvent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/event-stream")

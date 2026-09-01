@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ekk1/ai-desktop/internal/store"
 )
 
 func TestImportDefaultsToArchiveAndDeduplicatesPhysicalContent(t *testing.T) {
@@ -85,6 +87,37 @@ func TestRepositoryPersistsStateMetadataAndIndependentCopies(t *testing.T) {
 	active := reopened.List(Filter{State: StateActive, Query: "use"})
 	if len(active) != 1 || active[0].ID != created.ID {
 		t.Fatalf("filtered assets = %#v", active)
+	}
+}
+
+func TestRepositoryDoesNotRestoreInvalidAssetBackup(t *testing.T) {
+	root := t.TempDir()
+	indexPath := filepath.Join(root, "index.json")
+	filesDir := filepath.Join(root, "files")
+	repository, err := OpenRepository(indexPath, filesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := repository.Import(ImportInput{Reader: strings.NewReader("safe"), DisplayName: "safe.txt", MediaType: "text/plain"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := created
+	invalid.StoredName = "../../config.json"
+	if err := store.WriteJSON(indexPath+".bak", document{SchemaVersion: assetSchemaVersion, Assets: []Asset{invalid}}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte(`{"schema_version":1`)
+	if err := os.WriteFile(indexPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenRepository(indexPath, filesDir); err == nil {
+		t.Fatal("repository restored an invalid asset backup")
+	}
+	contents, err := os.ReadFile(indexPath)
+	if err != nil || !bytes.Equal(contents, corrupt) {
+		t.Fatalf("primary = %q, error = %v; want corrupt primary left unchanged", contents, err)
 	}
 }
 

@@ -68,16 +68,14 @@ func (service *Service) DeleteSession(sessionID string) error {
 	for _, panel := range before.Panels {
 		changes = append(changes, changesForPanel(panel)...)
 	}
-	if err := service.repository.deleteWorkspace(sessionID); err != nil {
-		return err
-	}
 	completed, err := service.removeReferencesUntilError(changes)
-	if err == nil {
-		return nil
+	if err != nil {
+		return joinMutationError(err, service.addReferencesCollectErrors(completed))
 	}
-	rollbackErrors := []error{service.repository.restoreWorkspace(before)}
-	rollbackErrors = append(rollbackErrors, service.addReferencesCollectErrors(completed)...)
-	return joinMutationError(err, rollbackErrors)
+	if err := service.repository.deleteWorkspace(sessionID); err != nil {
+		return joinMutationError(err, service.addReferencesCollectErrors(completed))
+	}
+	return nil
 }
 
 func (service *Service) CreatePanel(sessionID string, input CreatePanelInput) (Panel, error) {

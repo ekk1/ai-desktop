@@ -47,10 +47,7 @@ func OpenRepository(indexPath, filesDir string) (*Repository, error) {
 	}
 	stored := document{}
 	err := store.ReadJSONWithBackup(indexPath, &stored, 0o600, func() error {
-		if stored.SchemaVersion != assetSchemaVersion {
-			return fmt.Errorf("asset schema version %d is unsupported", stored.SchemaVersion)
-		}
-		return nil
+		return validateDocument(stored)
 	})
 	if errors.Is(err, os.ErrNotExist) {
 		stored = document{SchemaVersion: assetSchemaVersion, Assets: []Asset{}}
@@ -60,8 +57,8 @@ func OpenRepository(indexPath, filesDir string) (*Repository, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	if stored.SchemaVersion != assetSchemaVersion {
-		return nil, fmt.Errorf("asset schema version %d is unsupported", stored.SchemaVersion)
+	if err := validateDocument(stored); err != nil {
+		return nil, err
 	}
 	return &Repository{indexPath: indexPath, filesDir: filesDir, assets: cloneAssets(stored.Assets)}, nil
 }
@@ -357,6 +354,62 @@ func randomID() (string, error) {
 		return "", fmt.Errorf("generate asset ID: %w", err)
 	}
 	return hex.EncodeToString(value), nil
+}
+
+func validateDocument(stored document) error {
+	if stored.SchemaVersion != assetSchemaVersion {
+		return fmt.Errorf("asset schema version %d is unsupported", stored.SchemaVersion)
+	}
+	ids := make(map[string]struct{}, len(stored.Assets))
+	for _, item := range stored.Assets {
+		if !validHex(item.ID, 32) {
+			return fmt.Errorf("asset ID %q is invalid", item.ID)
+		}
+		if _, duplicate := ids[item.ID]; duplicate {
+			return fmt.Errorf("duplicate asset ID %q", item.ID)
+		}
+		ids[item.ID] = struct{}{}
+		if !validHex(item.SHA256, 64) {
+			return fmt.Errorf("asset %q has invalid SHA-256", item.ID)
+		}
+		if _, _, err := mime.ParseMediaType(item.MediaType); err != nil {
+			return fmt.Errorf("asset %q has invalid media type: %w", item.ID, err)
+		}
+		if strings.TrimSpace(item.DisplayName) == "" || filepath.Base(item.DisplayName) != item.DisplayName || item.DisplayName == "." || item.DisplayName == ".." {
+			return fmt.Errorf("asset %q has invalid display name", item.ID)
+		}
+		if item.StoredName == "" || filepath.Base(item.StoredName) != item.StoredName || item.StoredName == "." || item.StoredName == ".." || !strings.HasPrefix(item.StoredName, item.SHA256) {
+			return fmt.Errorf("asset %q has invalid stored name", item.ID)
+		}
+		if item.Size < 0 || item.Width < 0 || item.Height < 0 {
+			return fmt.Errorf("asset %q has invalid dimensions or size", item.ID)
+		}
+		if err := validateState(item.State); err != nil {
+			return fmt.Errorf("asset %q: %w", item.ID, err)
+		}
+		if item.CreatedAt.IsZero() || item.UpdatedAt.Before(item.CreatedAt) {
+			return fmt.Errorf("asset %q has invalid timestamps", item.ID)
+		}
+		references := make(map[Reference]struct{}, len(item.References))
+		for _, reference := range item.References {
+			if reference.Module == "" || reference.RecordID == "" {
+				return fmt.Errorf("asset %q has an invalid reference", item.ID)
+			}
+			if _, duplicate := references[reference]; duplicate {
+				return fmt.Errorf("asset %q has a duplicate reference", item.ID)
+			}
+			references[reference] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validHex(value string, length int) bool {
+	if len(value) != length || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func cloneAssets(items []Asset) []Asset {

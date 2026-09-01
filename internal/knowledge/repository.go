@@ -32,10 +32,7 @@ type Repository struct {
 func OpenRepository(path string) (*Repository, error) {
 	stored := document{}
 	err := store.ReadJSONWithBackup(path, &stored, 0o600, func() error {
-		if stored.SchemaVersion != schemaVersion {
-			return fmt.Errorf("knowledge schema version %d is unsupported", stored.SchemaVersion)
-		}
-		return nil
+		return validateDocument(stored)
 	})
 	if errors.Is(err, os.ErrNotExist) {
 		stored = document{SchemaVersion: schemaVersion, Notes: []Note{}}
@@ -45,8 +42,8 @@ func OpenRepository(path string) (*Repository, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	if stored.SchemaVersion != schemaVersion {
-		return nil, fmt.Errorf("knowledge schema version %d is unsupported", stored.SchemaVersion)
+	if err := validateDocument(stored); err != nil {
+		return nil, err
 	}
 	return &Repository{path: path, notes: cloneNotes(stored.Notes)}, nil
 }
@@ -187,4 +184,52 @@ func randomNoteID() (string, error) {
 		return "", fmt.Errorf("generate knowledge note ID: %w", err)
 	}
 	return hex.EncodeToString(value), nil
+}
+
+func validateDocument(stored document) error {
+	if stored.SchemaVersion != schemaVersion {
+		return fmt.Errorf("knowledge schema version %d is unsupported", stored.SchemaVersion)
+	}
+	ids := make(map[string]struct{}, len(stored.Notes))
+	for _, note := range stored.Notes {
+		if !validNoteID(note.ID) {
+			return fmt.Errorf("knowledge note ID %q is invalid", note.ID)
+		}
+		if _, duplicate := ids[note.ID]; duplicate {
+			return fmt.Errorf("duplicate knowledge note ID %q", note.ID)
+		}
+		ids[note.ID] = struct{}{}
+		if note.Title == "" || strings.TrimSpace(note.Title) != note.Title || strings.TrimSpace(note.Folder) != note.Folder {
+			return fmt.Errorf("knowledge note %q has invalid metadata", note.ID)
+		}
+		if note.CreatedAt.IsZero() || note.UpdatedAt.Before(note.CreatedAt) {
+			return fmt.Errorf("knowledge note %q has invalid timestamps", note.ID)
+		}
+		if !canonicalStrings(note.Tags) || !canonicalStrings(note.AssetIDs) {
+			return fmt.Errorf("knowledge note %q has invalid tags or asset IDs", note.ID)
+		}
+	}
+	return nil
+}
+
+func validNoteID(value string) bool {
+	if len(value) != 32 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func canonicalStrings(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" || strings.TrimSpace(value) != value {
+			return false
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
 }

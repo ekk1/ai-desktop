@@ -234,6 +234,10 @@ func (client Client) readLogEvents(ctx context.Context, body io.ReadCloser, even
 				failures <- err
 				return
 			}
+			if int64(len(event.Data)) > client.responseLimit() {
+				failures <- fmt.Errorf("decode log event: %w", ErrResponseTooLarge)
+				return
+			}
 			select {
 			case events <- event:
 			case <-ctx.Done():

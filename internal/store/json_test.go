@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -145,5 +146,30 @@ func TestReadJSONWithBackupDoesNotClassifyMissingBackupAsMissingPrimary(t *testi
 	err := ReadJSONWithBackup(path, &got, 0o600, nil)
 	if err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("error = %v, want corruption without missing-primary classification", err)
+	}
+}
+
+func TestReadJSONWithBackupDoesNotRecoverTypedDecodeMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	backup := testDocument{SchemaVersion: 1, Name: "backup"}
+	if err := WriteJSON(path, backup, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteJSON(path+".bak", backup, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	primary := []byte(`{"schema_version":"1","name":"typed-mismatch"}`)
+	if err := os.WriteFile(path, primary, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var got testDocument
+	err := ReadJSONWithBackup(path, &got, 0o600, nil)
+	if err == nil || errors.Is(err, ErrInvalidJSON) {
+		t.Fatalf("error = %v, want typed decode failure without corruption classification", err)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil || !bytes.Equal(contents, primary) {
+		t.Fatalf("primary = %q, read error = %v; want unchanged %q", contents, readErr, primary)
 	}
 }

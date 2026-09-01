@@ -119,17 +119,29 @@ func readJSON(path string, value any) error {
 	defer file.Close()
 
 	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(value); err != nil {
-		return fmt.Errorf("%w: decode JSON %q: %v", ErrInvalidJSON, path, err)
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		return classifyJSONDocumentError(path, "decode", err)
 	}
-	var trailing any
+	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return fmt.Errorf("%w: decode JSON %q: multiple JSON values", ErrInvalidJSON, path)
 		}
-		return fmt.Errorf("%w: decode trailing JSON %q: %v", ErrInvalidJSON, path, err)
+		return classifyJSONDocumentError(path, "decode trailing", err)
+	}
+	if err := json.Unmarshal(raw, value); err != nil {
+		return fmt.Errorf("decode typed JSON %q: %w", path, err)
 	}
 	return nil
+}
+
+func classifyJSONDocumentError(path, operation string, err error) error {
+	var syntaxError *json.SyntaxError
+	if errors.As(err, &syntaxError) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("%w: %s JSON %q: %v", ErrInvalidJSON, operation, path, err)
+	}
+	return fmt.Errorf("%s JSON %q: %w", operation, path, err)
 }
 
 func preserveBackup(path string, perm fs.FileMode) error {
