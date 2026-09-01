@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -481,6 +482,62 @@ func TestRunStartsAndShutsDownWithContext(t *testing.T) {
 	}
 	if err := syscall.Kill(started.PID, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("managed backend PID %d survived app shutdown: %v", started.PID, err)
+	}
+}
+
+func TestRunLogsServerLifecycle(t *testing.T) {
+	dataDir := t.TempDir()
+	port := reservePort(t)
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	previousFlags := log.Flags()
+	previousPrefix := log.Prefix()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(previousOutput)
+		log.SetFlags(previousFlags)
+		log.SetPrefix(previousPrefix)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- Run(ctx, Options{DataDir: dataDir, PortOverride: port, Version: "log-test"})
+	}()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		response, err := http.Get(url)
+		if err == nil {
+			_ = response.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not start: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop after context cancellation")
+	}
+
+	want := fmt.Sprintf(
+		"ai-workbench started: url=http://127.0.0.1:%d version=log-test data_dir=%s\n"+
+			"ai-workbench stopping\n"+
+			"ai-workbench stopped\n",
+		port, dataDir,
+	)
+	if got := logs.String(); got != want {
+		t.Fatalf("lifecycle log:\n%s\nwant:\n%s", got, want)
 	}
 }
 

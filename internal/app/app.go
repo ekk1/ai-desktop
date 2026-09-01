@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -204,10 +206,19 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 	server := runtime.server
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSeconds)*time.Second)
+		defer cancel()
+		managerErr := runtime.shutdownManagers(shutdownContext)
+		return errors.Join(fmt.Errorf("serve %s: %w", server.Addr, err), managerErr)
+	}
+	log.Printf("ai-workbench started: url=http://%s version=%s data_dir=%s", server.Addr, options.Version, dataDir)
+	defer log.Print("ai-workbench stopped")
 
 	serverResult := make(chan error, 1)
 	go func() {
-		serverResult <- server.ListenAndServe()
+		serverResult <- server.Serve(listener)
 	}()
 
 	select {
@@ -223,6 +234,7 @@ func Run(ctx context.Context, options Options) error {
 		}
 		return errors.Join(err, managerErr)
 	case <-ctx.Done():
+		log.Print("ai-workbench stopping")
 		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		shutdownResult := make(chan error, 1)

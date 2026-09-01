@@ -155,6 +155,13 @@ func TestEmbeddedWorkbenchShellExposesModulesAndResponsiveControls(t *testing.T)
 	}
 }
 
+func TestEmbeddedWorkspaceNavigationKeepsHiddenViewsOutOfLayout(t *testing.T) {
+	styles := getBody(t, "/assets/styles.css")
+	if !strings.Contains(styles, "[hidden] {\n  display: none !important;\n}") {
+		t.Fatal("workspace CSS does not force hidden views out of layout")
+	}
+}
+
 func TestEmbeddedBackendEditorExposesFoldedWorkerControls(t *testing.T) {
 	index := getBody(t, "/")
 	for _, marker := range []string{
