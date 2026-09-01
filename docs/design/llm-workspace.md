@@ -4,7 +4,7 @@
 
 **状态：** 已交付
 
-**上位设计：** `docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md`
+**上位设计：** [本地 AI 工作台总体设计](architecture.md)
 
 ## 1. 目标与范围
 

@@ -2,6 +2,8 @@
 
 一个面向 Linux 本地 AI 工作流的单体 Web 工作台。后端仅使用 Go 标准库，前端仅使用原生 HTML、CSS 和 JavaScript，最终构建为一个内嵌页面资源的二进制。
 
+设计边界与维护入口见[项目文档](docs/README.md)。
+
 当前已完成基础骨架、后端管理、远端进程 Worker、共享资产、知识备忘录、LLM 完整请求工作区、生图工作区和视频工作区：
 
 - 固定监听 `127.0.0.1` 的 HTTP Server
@@ -37,7 +39,7 @@
 - 受信任的本机视频 CLI、固定工作区、原始日志和精确输出校验
 - 外部尾帧提取、归档/精选以及继续作为下一条视频首帧
 
-远端进程 Worker 已按[独立设计](docs/superpowers/specs/2026-08-31-remote-worker-design.md)交付，[视频工作区](docs/superpowers/specs/2026-08-31-video-workspace-design.md)也已接入。Worker 只经 SSH 隧道控制一个云端进程组，不传输 Prompt、Asset 或结果；生成请求通过另一条隧道直达模型 Server。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
+远端进程 Worker 已按[独立设计](docs/design/remote-worker.md)交付，[视频工作区](docs/design/video-workspace.md)也已接入。Worker 只经 SSH 隧道控制一个云端进程组，不传输 Prompt、Asset 或结果；生成请求通过另一条隧道直达模型 Server。已交付的 [LLM](docs/design/llm-workspace.md) 与[生图](docs/design/image-workspace.md)行为分别记录在独立设计中。
 
 ## 要求
 

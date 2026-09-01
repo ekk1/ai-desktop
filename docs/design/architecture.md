@@ -2,7 +2,7 @@
 
 **日期：** 2026-08-30
 
-**状态：** 已批准；阶段 1–7 已交付
+**状态：** v1.0 已交付；阶段 1–7 完成
 
 **运行环境：** Linux 单用户服务，通过 SSH 隧道访问
 
@@ -119,7 +119,7 @@ Server 到浏览器使用 SSE。SSE 载荷可以用 JSON 字符串运输文本�
 
 后端 Profile 可以选择本机执行或远端 Worker 执行。Worker 只绑定云端回环地址，任一时刻只管理一个进程组；工作台通过一条 SSH 隧道控制 Worker，通过另一条隧道直接访问模型 Server。Worker 不保存 Profile、Prompt、Asset、结果或日志文件，也不提供文件传输和生成 API。
 
-完整协议、断线语义和界面集成见[远端进程 Worker 设计](2026-08-31-remote-worker-design.md)。
+完整协议、断线语义和界面集成见[远端进程 Worker 设计](remote-worker.md)。
 
 ## 6. LLM 请求工作区
 
@@ -208,7 +208,7 @@ Exa 不使用模型供应商的 tool/function calling 参数。普通 Panel 中�
 
 ## 10. 视频工作区
 
-视频是独立领域和独立界面，拥有自己的批次模型、预设、校验和结果历史。主要参数包括 prompt、negative prompt、尺寸、seed、时长或帧数、FPS、首帧、尾帧、参考素材和视频专用采样参数。完整能力边界见[视频工作区设计](2026-08-31-video-workspace-design.md)。
+视频是独立领域和独立界面，拥有自己的批次模型、预设、校验和结果历史。主要参数包括 prompt、negative prompt、尺寸、seed、时长或帧数、FPS、首帧、尾帧、参考素材和视频专用采样参数。完整能力边界见[视频工作区设计](video-workspace.md)。
 
 ### 10.1 HTTP 路径
 
