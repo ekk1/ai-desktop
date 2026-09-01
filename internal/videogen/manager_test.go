@@ -612,6 +612,33 @@ func TestManagerCancelsCLIProcessAttempt(t *testing.T) {
 	}
 }
 
+func TestManagerPersistsLongRunningCLIPID(t *testing.T) {
+	fixture := newVideoManagerFixture(t, "local_cli", 1)
+	videos := fixture.config.Snapshot().Videos
+	videos.CLIPresets[0].CommandTemplate = "trap 'exit 0' TERM; while :; do sleep 1; done"
+	if _, err := fixture.config.UpdateVideos(videos); err != nil {
+		t.Fatal(err)
+	}
+	batch := fixture.createBatch("pid", "local-cli", 1, 1)
+	attempt, err := fixture.manager.StartItem(batch.ID, batch.Items[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, ok := fixture.manager.GetAttempt(attempt.ID)
+		if ok && current.State == AttemptRunning && current.PID > 0 {
+			if err := fixture.manager.Cancel(attempt.ID); err != nil {
+				t.Fatal(err)
+			}
+			fixture.waitTerminal([]Attempt{attempt})
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("long-running CLI PID was not persisted: %#v", attempt)
+}
+
 // This fails if a local CLI timeout is persisted as a generic failure rather
 // than the explicit timeout terminal state exposed to a Batch client.
 func TestManagerRecordsCLITimeout(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/ekk1/ai-desktop/internal/backend"
 	"github.com/ekk1/ai-desktop/internal/config"
+	"github.com/ekk1/ai-desktop/internal/videoconfig"
 	"github.com/ekk1/ai-desktop/internal/videogen"
 )
 
@@ -142,6 +144,121 @@ func TestApplicationReopenInterruptsVideoAttemptAfterRemoteCancelConflict(t *tes
 	var attempt videogen.Attempt
 	if err := json.NewDecoder(get.Body).Decode(&attempt); err != nil || get.Code != http.StatusOK || attempt.State != videogen.AttemptInterrupted {
 		t.Fatalf("attempt=%#v status=%d err=%v", attempt, get.Code, err)
+	}
+}
+
+func TestApplicationShutsDownSharedVideoCLIAndTailExecutor(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Videos.CLIPresets = []videoconfig.CLIPreset{{ID: "cli", Name: "CLI", Enabled: true, ExecutionKind: videoconfig.ExecutionLocalCLI, CommandTemplate: "trap 'exit 0' TERM; while :; do sleep 1; done; : {{OUTPUT_PATH}}", WorkDir: "/tmp", Env: map[string]string{}, TimeoutSeconds: 30, StopGraceSeconds: 0, LogBufferBytes: 1024, OutputRelativePath: "outputs/result.webm", OutputMediaType: "video/webm", OutputExtension: ".webm", MaxOutputBytes: 1024, DefaultParams: json.RawMessage(`{}`)}}
+	cfg.Videos.TailFramePresets = []videoconfig.TailFramePreset{{ID: "tail", Name: "Tail", Enabled: true, CommandTemplate: "trap 'exit 0' TERM; while :; do sleep 1; done; : {{OUTPUT_IMAGE}}", TimeoutSeconds: 30, StopGraceSeconds: 0, MaxImageBytes: 1024, OutputExtension: ".png"}}
+	runtime, err := newRuntime(dataDir, cfg, "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = runtime.shutdownManagers(ctx)
+	})
+	serve := runtime.server.Handler
+	batchResponse := httptest.NewRecorder()
+	serve.ServeHTTP(batchResponse, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches", bytes.NewBufferString(`{"title":"cli","execution_kind":"local_cli","preset_id":"cli","concurrency":1,"common_params":{},"timing":{"mode":"frames","video_frames":1,"fps":1}}`)))
+	var batch struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(batchResponse.Body).Decode(&batch); err != nil || batchResponse.Code != 201 {
+		t.Fatalf("batch %d %v %s", batchResponse.Code, err, batchResponse.Body.String())
+	}
+	itemResponse := httptest.NewRecorder()
+	serve.ServeHTTP(itemResponse, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches/"+batch.ID+"/items", bytes.NewBufferString(`{"items":[{"prompt":"run","enabled":true,"params_override":{}}]}`)))
+	var items struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(itemResponse.Body).Decode(&items); err != nil || len(items.Items) != 1 {
+		t.Fatalf("items %v %s", err, itemResponse.Body.String())
+	}
+	startResponse := httptest.NewRecorder()
+	serve.ServeHTTP(startResponse, httptest.NewRequest(http.MethodPost, "/api/v1/videos/batches/"+batch.ID+"/items/"+items.Items[0].ID+"/execute", bytes.NewBufferString(`{}`)))
+	var started struct {
+		Attempts []videogen.Attempt `json:"attempts"`
+	}
+	if err := json.NewDecoder(startResponse.Body).Decode(&started); err != nil || len(started.Attempts) != 1 {
+		t.Fatalf("start %v %s", err, startResponse.Body.String())
+	}
+	var upload bytes.Buffer
+	writer := multipart.NewWriter(&upload)
+	part, err := writer.CreateFormFile("file", "source.webm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("video"))
+	_ = writer.WriteField("media_type", "video/webm")
+	_ = writer.Close()
+	uploadReq := httptest.NewRequest(http.MethodPost, "/api/v1/assets", &upload)
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadResponse := httptest.NewRecorder()
+	serve.ServeHTTP(uploadResponse, uploadReq)
+	var source struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(uploadResponse.Body).Decode(&source); err != nil || source.ID == "" {
+		t.Fatalf("upload %v %s", err, uploadResponse.Body.String())
+	}
+	tailResponse := httptest.NewRecorder()
+	serve.ServeHTTP(tailResponse, httptest.NewRequest(http.MethodPost, "/api/v1/videos/tail-extractions", bytes.NewBufferString(`{"source_asset_id":"`+source.ID+`","preset_id":"tail"}`)))
+	var tail videogen.TailExtraction
+	if err := json.NewDecoder(tailResponse.Body).Decode(&tail); err != nil || tailResponse.Code != 202 {
+		t.Fatalf("tail %d %v %s", tailResponse.Code, err, tailResponse.Body.String())
+	}
+	var cliPID, tailPID int
+	var lastAttempt videogen.Attempt
+	var lastTail videogen.TailExtraction
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		a := httptest.NewRecorder()
+		serve.ServeHTTP(a, httptest.NewRequest(http.MethodGet, "/api/v1/videos/attempts/"+started.Attempts[0].ID, nil))
+		var attempt videogen.Attempt
+		_ = json.NewDecoder(a.Body).Decode(&attempt)
+		lastAttempt = attempt
+		b := httptest.NewRecorder()
+		serve.ServeHTTP(b, httptest.NewRequest(http.MethodGet, "/api/v1/videos/tail-extractions/"+tail.ID, nil))
+		var currentTail videogen.TailExtraction
+		_ = json.NewDecoder(b.Body).Decode(&currentTail)
+		lastTail = currentTail
+		if attempt.PID > 0 && currentTail.PID > 0 {
+			cliPID, tailPID = attempt.PID, currentTail.PID
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cliPID == 0 || tailPID == 0 {
+		t.Fatalf("PIDs cli=%d tail=%d attempt=%#v tail=%#v", cliPID, tailPID, lastAttempt, lastTail)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "video-workspace", "tail-"+tail.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "videos", "tail-workspaces")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old tail root: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runtime.shutdownManagers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/videos/attempts/" + started.Attempts[0].ID, "/api/v1/videos/tail-extractions/" + tail.ID} {
+		response := httptest.NewRecorder()
+		serve.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"cancelled"`) {
+			t.Fatalf("terminal %s = %d %s", path, response.Code, response.Body.String())
+		}
+	}
+	for _, pid := range []int{cliPID, tailPID} {
+		if err := syscall.Kill(-pid, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("process group %d survives: %v", pid, err)
+		}
 	}
 }
 

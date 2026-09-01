@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	videos := videoconfig.Config{CLIPresets: []videoconfig.CLIPreset{{ID: "local-cli", Name: "Local", Enabled: true, ExecutionKind: videoconfig.ExecutionLocalCLI, CommandTemplate: "sleep 0.05; printf cli-log; sleep 1; printf '\\x1a\\x45\\xdf\\xa3' > {{OUTPUT_PATH}}", WorkDir: "/tmp", Env: map[string]string{}, TimeoutSeconds: 2, StopGraceSeconds: 0, LogBufferBytes: 1024, OutputRelativePath: "outputs/result.webm", OutputMediaType: "video/webm", OutputExtension: ".webm", MaxOutputBytes: 1024, DefaultParams: json.RawMessage(`{}`)}}}
+	videos := videoconfig.Config{CLIPresets: []videoconfig.CLIPreset{{ID: "local-cli", Name: "Local", Enabled: true, ExecutionKind: videoconfig.ExecutionLocalCLI, CommandTemplate: "while [ ! -f {{WORKSPACE_DIR}}/release ]; do sleep 0.01; done; printf cli-log; sleep 1; printf '\\x1a\\x45\\xdf\\xa3' > {{OUTPUT_PATH}}", WorkDir: "/tmp", Env: map[string]string{}, TimeoutSeconds: 2, StopGraceSeconds: 0, LogBufferBytes: 1024, OutputRelativePath: "outputs/result.webm", OutputMediaType: "video/webm", OutputExtension: ".webm", MaxOutputBytes: 1024, DefaultParams: json.RawMessage(`{}`)}}}
 	if _, err := cfg.UpdateVideos(videos); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,13 @@ func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	handler := videoAttemptHandler{manager: manager, heartbeat: 5 * time.Millisecond}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.logs(w, r, attempt.ID) }))
 	defer server.Close()
-	response, err := http.Get(server.URL)
+	streamCtx, cancelStream := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelStream()
+	request, err := http.NewRequestWithContext(streamCtx, http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +107,11 @@ func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	if first != "event: snapshot\n" || !strings.Contains(data, `"start_offset"`) || !strings.Contains(data, `"data_base64"`) {
 		t.Fatalf("snapshot=%q %q", first, data)
 	}
+	if err := os.WriteFile(filepath.Join(root, "workspace", attempt.ID, "release"), []byte("go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	foundChunk, foundHeartbeat := false, false
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) && (!foundChunk || !foundHeartbeat) {
 		line, readErr := reader.ReadString('\n')
 		if readErr != nil {

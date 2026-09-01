@@ -773,7 +773,7 @@ func allowedAttemptTransition(from, to AttemptState) bool {
 	case AttemptPolling:
 		return to == AttemptPolling || to == AttemptRunning || to == AttemptSucceeded || to == AttemptFailed || to == AttemptCancelled
 	case AttemptRunning:
-		return to == AttemptSucceeded || to == AttemptFailed || to == AttemptCancelled
+		return to == AttemptRunning || to == AttemptSucceeded || to == AttemptFailed || to == AttemptCancelled
 	default:
 		return false
 	}
