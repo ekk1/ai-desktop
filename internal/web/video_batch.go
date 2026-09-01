@@ -254,6 +254,8 @@ func writeVideoAPIError(w http.ResponseWriter, err error) {
 		writeAPIError(w, 409, "move_boundary", err.Error())
 	case errors.Is(err, videogen.ErrVideoManagerClosed), errors.Is(err, videogen.ErrTailExtractorClosed):
 		writeAPIError(w, 409, "manager_closed", "video workbench is shutting down")
+	case errors.Is(err, videogen.ErrCLIExecutorShutdown):
+		writeAPIError(w, 500, "internal_error", "video process executor is unavailable")
 	default:
 		var pe *os.PathError
 		if errors.As(err, &pe) {

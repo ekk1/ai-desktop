@@ -11,17 +11,29 @@ import (
 
 	"github.com/ekk1/ai-desktop/internal/config"
 	"github.com/ekk1/ai-desktop/internal/sdcpp"
+	"github.com/ekk1/ai-desktop/internal/videoconfig"
 )
 
-func TestVideoConfigAPIReplacesAllPresetKinds(t *testing.T) {
+func TestVideoConfigAPIReadsAllPresetKindsAndRejectsEscapingCLIOutput(t *testing.T) {
 	root := t.TempDir()
 	repository, err := config.OpenRepository(filepath.Join(root, "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler := NewHandler(Options{Config: repository.Snapshot(), ConfigRepository: repository})
-	videos := repository.Snapshot().Videos
-	videos.CLIPresets = videos.CLIPresets[:0]
+	videos := videoconfig.Config{
+		HTTPProviders: repository.Snapshot().Videos.HTTPProviders,
+		CLIPresets: []videoconfig.CLIPreset{{
+			ID: "cli-contract", Name: "CLI Contract", Enabled: true, ExecutionKind: videoconfig.ExecutionLocalCLI,
+			CommandTemplate: "printf video > {{OUTPUT_PATH}}", WorkDir: root, Env: map[string]string{"MODE": "test"},
+			TimeoutSeconds: 2, StopGraceSeconds: 0, LogBufferBytes: 1024, OutputRelativePath: "outputs/contract.webm",
+			OutputMediaType: "video/webm", OutputExtension: ".webm", MaxOutputBytes: 2048, DefaultParams: json.RawMessage(`{"seed":7}`),
+		}},
+		TailFramePresets: []videoconfig.TailFramePreset{{
+			ID: "tail-contract", Name: "Tail Contract", Enabled: true, CommandTemplate: "printf image > {{OUTPUT_IMAGE}}",
+			TimeoutSeconds: 2, StopGraceSeconds: 0, MaxImageBytes: 1024, OutputExtension: ".png",
+		}},
+	}
 	body, err := json.Marshal(videos)
 	if err != nil {
 		t.Fatal(err)
@@ -29,9 +41,41 @@ func TestVideoConfigAPIReplacesAllPresetKinds(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/videos/config", bytes.NewReader(body))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || len(repository.Snapshot().Videos.CLIPresets) != 0 {
+	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/videos/config", nil))
+	var decoded videoconfig.Config
+	if err := json.NewDecoder(get.Body).Decode(&decoded); get.Code != http.StatusOK || err != nil {
+		t.Fatalf("GET status=%d body=%s decode=%v", get.Code, get.Body.String(), err)
+	}
+	if len(decoded.HTTPProviders) != 1 || decoded.HTTPProviders[0].ID != "sdcpp-video-local" || decoded.HTTPProviders[0].BaseURL != "http://127.0.0.1:1234" {
+		t.Fatalf("HTTP providers = %#v", decoded.HTTPProviders)
+	}
+	if len(decoded.CLIPresets) != 1 || decoded.CLIPresets[0].ID != "cli-contract" || decoded.CLIPresets[0].OutputRelativePath != "outputs/contract.webm" || decoded.CLIPresets[0].Env["MODE"] != "test" {
+		t.Fatalf("CLI presets = %#v", decoded.CLIPresets)
+	}
+	if len(decoded.TailFramePresets) != 1 || decoded.TailFramePresets[0].ID != "tail-contract" || decoded.TailFramePresets[0].OutputExtension != ".png" {
+		t.Fatalf("tail presets = %#v", decoded.TailFramePresets)
+	}
+
+	invalid := decoded.Clone()
+	invalid.CLIPresets[0].OutputRelativePath = "outputs/../../outside.webm"
+	invalidBody, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, httptest.NewRequest(http.MethodPut, "/api/v1/videos/config", bytes.NewReader(invalidBody)))
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("escaping output status=%d body=%s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+	if got := repository.Snapshot().Videos.CLIPresets[0].OutputRelativePath; got != "outputs/contract.webm" {
+		t.Fatalf("invalid PUT mutated output_relative_path to %q", got)
+	}
+
 	unknown := httptest.NewRecorder()
 	handler.ServeHTTP(unknown, httptest.NewRequest(http.MethodPut, "/api/v1/videos/config", bytes.NewReader([]byte(`{"unknown":true}`))))
 	if unknown.Code != http.StatusBadRequest {
