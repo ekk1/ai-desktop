@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
 	"github.com/ekk1/ai-desktop/internal/videoconfig"
@@ -57,16 +56,14 @@ type ManifestInput struct {
 	Method    string `json:"method"`
 }
 
-// WorkspaceManager owns the fixed local workspace root. Link may be replaced
-// in tests or by a platform adapter; its default is os.Link.
+// WorkspaceManager owns the fixed local workspace root.
 type WorkspaceManager struct {
 	root   string
 	assets *asset.Repository
-	Link   func(oldname, newname string) error
 }
 
 func NewWorkspaceManager(root string, assets *asset.Repository) *WorkspaceManager {
-	return &WorkspaceManager{root: root, assets: assets, Link: os.Link}
+	return &WorkspaceManager{root: root, assets: assets}
 }
 
 func (manager *WorkspaceManager) Prepare(attemptID string, snapshot Snapshot) (workspace Workspace, err error) {
@@ -238,41 +235,37 @@ func (manager *WorkspaceManager) stageInput(inputDir, attemptID string, snapshot
 	if filepath.Dir(destination) != inputDir {
 		return StagedInput{}, fmt.Errorf("video workspace staging path escaped inputs")
 	}
-	link := manager.Link
-	if link == nil {
-		link = os.Link
+	if err := copyWorkspaceInput(source, destination, snapshot.SHA256); err != nil {
+		return StagedInput{}, fmt.Errorf("copy video workspace input %q: %w", snapshot.ID, err)
 	}
-	method := "hardlink"
-	if err := link(source.Name(), destination); err != nil {
-		if !workspaceCopyFallback(err) {
-			return StagedInput{}, fmt.Errorf("hard link video workspace input %q: %w", snapshot.ID, err)
-		}
-		if _, err := source.Seek(0, io.SeekStart); err != nil {
-			return StagedInput{}, fmt.Errorf("rewind video workspace input %q: %w", snapshot.ID, err)
-		}
-		target, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			return StagedInput{}, fmt.Errorf("create copied video workspace input %q: %w", snapshot.ID, err)
-		}
-		_, copyErr := io.Copy(target, source)
-		if copyErr == nil {
-			copyErr = target.Sync()
-		}
-		closeErr := target.Close()
-		if copyErr != nil || closeErr != nil {
-			_ = os.Remove(destination)
-			if copyErr != nil {
-				return StagedInput{}, fmt.Errorf("copy video workspace input %q: %w", snapshot.ID, copyErr)
-			}
-			return StagedInput{}, fmt.Errorf("close copied video workspace input %q: %w", snapshot.ID, closeErr)
-		}
-		method = "copy"
+	return StagedInput{AssetID: snapshot.ID, SHA256: snapshot.SHA256, Role: snapshot.Role, Order: snapshot.Order, Path: destination, Method: "copy"}, nil
+}
+
+func copyWorkspaceInput(source *os.File, destination, wantSHA256 string) error {
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind source: %w", err)
 	}
-	if err := verifyWorkspacePathHash(destination, snapshot.SHA256); err != nil {
+	target, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create destination: %w", err)
+	}
+	_, copyErr := io.Copy(target, source)
+	if copyErr == nil {
+		copyErr = target.Sync()
+	}
+	closeErr := target.Close()
+	if copyErr != nil || closeErr != nil {
 		_ = os.Remove(destination)
-		return StagedInput{}, fmt.Errorf("verify staged video workspace input %q: %w", snapshot.ID, err)
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	}
-	return StagedInput{AssetID: snapshot.ID, SHA256: snapshot.SHA256, Role: snapshot.Role, Order: snapshot.Order, Path: destination, Method: method}, nil
+	if err := verifyWorkspacePathHash(destination, wantSHA256); err != nil {
+		_ = os.Remove(destination)
+		return fmt.Errorf("verify copied bytes: %w", err)
+	}
+	return nil
 }
 
 func workspaceAttemptPath(base, root, attemptID string) bool {
@@ -310,10 +303,6 @@ func workspaceExtension(mediaType string) string {
 	default:
 		return ".bin"
 	}
-}
-
-func workspaceCopyFallback(err error) bool {
-	return errors.Is(err, syscall.EXDEV) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
 }
 
 func verifyWorkspaceHash(reader io.Reader, want string) error {

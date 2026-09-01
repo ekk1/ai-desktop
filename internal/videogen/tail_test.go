@@ -5,6 +5,7 @@ package videogen
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,28 @@ func TestTailExtractorImportsArchiveImageAndReferencesSource(t *testing.T) {
 	}
 	assertTailReference(t, assets, source.ID, asset.Reference{Module: "video_attempt", RecordID: got.ID}, true)
 	assertTailReference(t, assets, output.ID, asset.Reference{Module: "video_result", RecordID: got.ID}, true)
+	if _, err := os.Stat(filepath.Join(extractor.workspaceRoot, "tail-"+got.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal tail workspace remains: %v", err)
+	}
+}
+
+// This fails if a Tail command receives a hard link to canonical Asset
+// content and can mutate it while writing a valid declared result.
+func TestTailExtractorStagesPrivateInputCopy(t *testing.T) {
+	extractor, assets := tailFixture(t, `printf overwritten > "$INPUT_VIDEO"; printf '\x89PNG\r\n\x1a\nfixture' > "$OUTPUT_IMAGE"`)
+	source := importFixtureAsset(t, assets, "video/webm")
+	original := tailAssetBytes(t, assets, source.ID)
+
+	extraction, err := extractor.Extract(context.Background(), source.ID, "tail-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitTailTerminal(t, extractor, extraction.ID); got.State != AttemptSucceeded {
+		t.Fatalf("extraction = %#v", got)
+	}
+	if got := tailAssetBytes(t, assets, source.ID); string(got) != string(original) {
+		t.Fatalf("canonical tail input changed through staged pathname: %q", got)
+	}
 }
 
 func TestTailExtractorAcceptsArchivedRetainedVideo(t *testing.T) {
@@ -184,6 +207,9 @@ func TestTailExtractorCancelsProcessGroupAndSavesLogOnlyOnRequest(t *testing.T) 
 	if got := waitTailTerminal(t, extractor, extraction.ID); got.State != AttemptCancelled {
 		t.Fatalf("extraction = %#v", got)
 	}
+	if _, err := os.Stat(filepath.Join(extractor.workspaceRoot, "tail-"+extraction.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled tail workspace remains: %v", err)
+	}
 	path, err := extractor.SaveExtractionLog(extraction.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +217,68 @@ func TestTailExtractorCancelsProcessGroupAndSavesLogOnlyOnRequest(t *testing.T) 
 	contents, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(contents), "tail-log") {
 		t.Fatalf("saved log = %q, error = %v", contents, err)
+	}
+}
+
+func TestTailExtractorCleansWorkspaceAfterCommandFailureAndPartialSetup(t *testing.T) {
+	extractor, assets := tailFixture(t, `exit 7`)
+	source := importFixtureAsset(t, assets, "video/webm")
+	extraction, err := extractor.Extract(context.Background(), source.ID, "tail-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitTailTerminal(t, extractor, extraction.ID); got.State != AttemptFailed {
+		t.Fatalf("extraction = %#v", got)
+	}
+	if _, err := os.Stat(filepath.Join(extractor.workspaceRoot, "tail-"+extraction.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed tail workspace remains: %v", err)
+	}
+
+	preset := extractor.config.Snapshot().Videos.TailFramePresets[0]
+	partialID := strings.Repeat("a", 32)
+	_, err = extractor.prepareWorkspace(TailExtraction{ID: partialID}, asset.Asset{ID: strings.Repeat("b", 32), MediaType: "video/webm"}, preset)
+	if err == nil {
+		t.Fatal("prepareWorkspace accepted a missing source")
+	}
+	if _, err := os.Stat(filepath.Join(extractor.workspaceRoot, "tail-"+partialID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial tail workspace remains: %v", err)
+	}
+}
+
+func TestTailExtractorSubscribeLogDelegatesToRegisteredExecution(t *testing.T) {
+	extractor, assets := tailFixture(t, `printf snapshot; sleep 0.1; printf chunk; printf '\x89PNG\r\n\x1a\nfixture' > "$OUTPUT_IMAGE"`)
+	source := importFixtureAsset(t, assets, "video/webm")
+	extraction, err := extractor.Extract(context.Background(), source.ID, "tail-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTailLog(t, extractor, extraction.ID, "snapshot")
+	snapshot, chunks, cancel, err := extractor.SubscribeLog(extraction.ID)
+	if err != nil || !strings.Contains(string(snapshot.Data), "snapshot") {
+		t.Fatalf("SubscribeLog snapshot = %#v, error = %v", snapshot, err)
+	}
+	defer cancel()
+	select {
+	case chunk := <-chunks:
+		if !strings.Contains(string(chunk.Data), "chunk") {
+			t.Fatalf("log chunk = %#v", chunk)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("tail log subscription did not receive future output")
+	}
+	if got := waitTailTerminal(t, extractor, extraction.ID); got.State != AttemptSucceeded {
+		t.Fatalf("extraction = %#v", got)
+	}
+	terminal, terminalChunks, terminalCancel, err := extractor.SubscribeLog(extraction.ID)
+	if err != nil || !strings.Contains(string(terminal.Data), "chunk") {
+		t.Fatalf("terminal SubscribeLog snapshot = %#v, error = %v", terminal, err)
+	}
+	terminalCancel()
+	if _, open := <-terminalChunks; open {
+		t.Fatal("cancelled terminal log subscription remains open")
+	}
+	if _, _, _, err := extractor.SubscribeLog(strings.Repeat("c", 32)); !errors.Is(err, ErrTailExtractionNotFound) {
+		t.Fatalf("unknown SubscribeLog error = %v", err)
 	}
 }
 
@@ -609,4 +697,18 @@ func assertTailReference(t *testing.T, assets *asset.Repository, id string, want
 	if present {
 		t.Fatalf("missing reference %#v from %#v", want, item.References)
 	}
+}
+
+func tailAssetBytes(t *testing.T, assets *asset.Repository, id string) []byte {
+	t.Helper()
+	file, _, err := assets.OpenContent(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return contents
 }

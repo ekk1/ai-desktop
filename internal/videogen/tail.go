@@ -114,6 +114,12 @@ func (extractor *TailExtractor) Extract(ctx context.Context, sourceAssetID, pres
 	if err != nil {
 		return extractor.finishWithoutRun(extraction, AttemptFailed, "workspace", err)
 	}
+	cleanupWorkspace := true
+	defer func() {
+		if cleanupWorkspace {
+			_ = extractor.cleanupWorkspace(extraction.ID)
+		}
+	}()
 	if _, err := extractor.assets.AddReference(source.ID, asset.Reference{Module: tailSourceReferenceModule, RecordID: extraction.ID}); err != nil {
 		return extractor.finishWithoutRun(extraction, AttemptFailed, "source_reference", err)
 	}
@@ -135,6 +141,7 @@ func (extractor *TailExtractor) Extract(ctx context.Context, sourceAssetID, pres
 	extractor.wait.Add(1)
 	extractor.mu.Unlock()
 	go extractor.execute(runContext, run, extraction, preset, workspace, command)
+	cleanupWorkspace = false
 	return extraction, nil
 }
 
@@ -199,6 +206,18 @@ func (extractor *TailExtractor) SubscribeExtraction(extractionID string) (TailEx
 		})
 	}
 	return extraction, updates, cancel, nil
+}
+
+// SubscribeLog returns an atomic bounded-log snapshot and future raw chunks
+// for a registered Tail execution. The shared executor owns log retention.
+func (extractor *TailExtractor) SubscribeLog(extractionID string) (VideoLogSnapshot, <-chan VideoLogChunk, func(), error) {
+	if extractor == nil || extractor.repository == nil || extractor.executor == nil || !validGeneratedID(extractionID) {
+		return VideoLogSnapshot{}, nil, nil, ErrTailExtractionNotFound
+	}
+	if _, ok := extractor.repository.Get(extractionID); !ok {
+		return VideoLogSnapshot{}, nil, nil, ErrTailExtractionNotFound
+	}
+	return extractor.executor.SubscribeLog(extractionID)
 }
 
 func (extractor *TailExtractor) SaveExtractionLog(extractionID string) (string, error) {
@@ -294,6 +313,12 @@ func (extractor *TailExtractor) prepareWorkspace(extraction TailExtraction, sour
 	if err := os.Mkdir(root, 0o700); err != nil {
 		return tailWorkspace{}, fmt.Errorf("create tail workspace: %w", err)
 	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = os.RemoveAll(root)
+		}
+	}()
 	workspace := tailWorkspace{root: root, outputDir: filepath.Join(root, "outputs")}
 	if err := os.Mkdir(filepath.Join(root, "inputs"), 0o700); err != nil {
 		return tailWorkspace{}, err
@@ -311,32 +336,19 @@ func (extractor *TailExtractor) prepareWorkspace(extraction TailExtraction, sour
 	if current.SHA256 != source.SHA256 || current.MediaType != source.MediaType || current.Size != source.Size {
 		return tailWorkspace{}, fmt.Errorf("tail source video changed before staging")
 	}
-	if err := os.Link(sourceFile.Name(), workspace.inputPath); err == nil {
-		return workspace, nil
+	if err := verifyWorkspaceHash(sourceFile, source.SHA256); err != nil {
+		return tailWorkspace{}, fmt.Errorf("verify tail source video: %w", err)
 	}
-	if _, err := sourceFile.Seek(0, io.SeekStart); err != nil {
-		return tailWorkspace{}, err
+	if err := copyWorkspaceInput(sourceFile, workspace.inputPath, source.SHA256); err != nil {
+		return tailWorkspace{}, fmt.Errorf("copy tail source video: %w", err)
 	}
-	target, err := os.OpenFile(workspace.inputPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return tailWorkspace{}, err
-	}
-	_, copyErr := io.Copy(target, sourceFile)
-	if copyErr == nil {
-		copyErr = target.Sync()
-	}
-	closeErr := target.Close()
-	if copyErr != nil {
-		return tailWorkspace{}, copyErr
-	}
-	if closeErr != nil {
-		return tailWorkspace{}, closeErr
-	}
+	completed = true
 	return workspace, nil
 }
 
 func (extractor *TailExtractor) execute(ctx context.Context, run *tailRun, extraction TailExtraction, preset videoconfig.TailFramePreset, workspace tailWorkspace, command string) {
 	defer extractor.wait.Done()
+	defer func() { _ = extractor.cleanupWorkspace(extraction.ID) }()
 	defer func() {
 		run.lifecycle.Lock()
 		finished := run.finished
@@ -411,6 +423,21 @@ func (extractor *TailExtractor) execute(ctx context.Context, run *tailRun, extra
 	}
 	extraction.State, extraction.OutputAssetID, extraction.Error = AttemptSucceeded, output.ID, AttemptError{}
 	extractor.finishTailRun(extraction.ID, run, extraction)
+}
+
+func (extractor *TailExtractor) cleanupWorkspace(extractionID string) error {
+	if extractor == nil || !validGeneratedID(extractionID) {
+		return fmt.Errorf("tail workspace extraction ID is invalid")
+	}
+	base := filepath.Clean(extractor.workspaceRoot)
+	root := filepath.Join(base, "tail-"+extractionID)
+	if !filepath.IsAbs(base) || filepath.Dir(root) != base || filepath.Base(root) != "tail-"+extractionID {
+		return fmt.Errorf("tail workspace cleanup path is invalid")
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return fmt.Errorf("remove tail workspace: %w", err)
+	}
+	return nil
 }
 
 func (extractor *TailExtractor) monitorPID(extractionID string, done <-chan struct{}) {

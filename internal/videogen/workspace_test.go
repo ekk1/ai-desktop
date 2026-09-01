@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/ekk1/ai-desktop/internal/asset"
@@ -57,12 +57,11 @@ func TestWorkspaceUsesConfiguredFixedRootExactlyOnce(t *testing.T) {
 	}
 }
 
-// This fails if a cross-device hard-link error does not copy the exact asset
-// bytes and record that fallback in the manifest.
-func TestWorkspaceCopiesAfterCrossDeviceLinkFailureAndVerifiesHash(t *testing.T) {
+// This fails if ordinary staging does not copy the exact asset bytes and
+// record private-copy staging in the manifest.
+func TestWorkspaceCopiesAndVerifiesHash(t *testing.T) {
 	manager, assets := workspaceFixture(t)
 	item := importFixtureAsset(t, assets, "video/webm")
-	manager.Link = func(string, string) error { return syscall.EXDEV }
 	snapshot := validWorkspaceSnapshot([]AssetSnapshot{{ID: item.ID, SHA256: item.SHA256, MediaType: item.MediaType, DisplayName: item.DisplayName, Size: item.Size, Role: "reference_video", Order: 0}})
 
 	workspace, err := manager.Prepare(workspaceAttemptID, snapshot)
@@ -76,6 +75,33 @@ func TestWorkspaceCopiesAfterCrossDeviceLinkFailureAndVerifiesHash(t *testing.T)
 		t.Fatalf("copied hash = %q, want %q", got, item.SHA256)
 	}
 	assertWorkspaceManifest(t, workspace.ManifestPath, workspaceAttemptID, snapshot.InputAssets)
+}
+
+// This fails if a local CLI can overwrite a staged pathname and thereby
+// mutate the canonical Asset inode or leave a manifest that claims hardlink
+// staging.
+func TestWorkspaceStagedInputsArePrivateCopies(t *testing.T) {
+	manager, assets := workspaceFixture(t)
+	item := importFixtureAsset(t, assets, "video/webm")
+	snapshot := validWorkspaceSnapshot([]AssetSnapshot{{ID: item.ID, SHA256: item.SHA256, MediaType: item.MediaType, DisplayName: item.DisplayName, Size: item.Size, Role: "reference_video", Order: 0}})
+	original := workspaceAssetBytes(t, assets, item.ID)
+
+	workspace, err := manager.Prepare(workspaceAttemptID, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := workspace.Inputs[0].Method; got != "copy" {
+		t.Fatalf("staging method = %q, want copy", got)
+	}
+	if err := os.WriteFile(workspace.Inputs[0].Path, []byte("CLI overwrote its input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := workspaceAssetBytes(t, assets, item.ID); string(got) != string(original) {
+		t.Fatalf("canonical asset changed through staged input: %q", got)
+	}
+	if got := fileSHA256(t, workspaceAssetContentPath(t, assets, item.ID)); got != item.SHA256 {
+		t.Fatalf("canonical asset hash = %q, want %q", got, item.SHA256)
+	}
 }
 
 // This fails if an attacker-controlled attempt identifier can influence any
@@ -204,6 +230,9 @@ func assertWorkspaceManifest(t *testing.T, path, attemptID string, want []AssetS
 		if input.AssetID != want[index].ID || input.SHA256 != want[index].SHA256 || input.MediaType != want[index].MediaType || input.Size != want[index].Size || filepath.IsAbs(input.Path) || strings.Contains(input.Path, "..") {
 			t.Fatalf("manifest input %d = %#v", index, input)
 		}
+		if input.Method != "copy" {
+			t.Fatalf("manifest input %d staging method = %q, want copy", index, input.Method)
+		}
 	}
 	if strings.Contains(string(contents), "\n") || strings.Contains(string(contents), "  ") {
 		t.Fatalf("manifest is not compact JSON: %q", contents)
@@ -225,4 +254,28 @@ func fileSHA256(t *testing.T, path string) string {
 	}
 	digest := sha256.Sum256(contents)
 	return hex.EncodeToString(digest[:])
+}
+
+func workspaceAssetBytes(t *testing.T, assets *asset.Repository, id string) []byte {
+	t.Helper()
+	file, _, err := assets.OpenContent(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+func workspaceAssetContentPath(t *testing.T, assets *asset.Repository, id string) string {
+	t.Helper()
+	file, _, err := assets.OpenContent(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	return file.Name()
 }
