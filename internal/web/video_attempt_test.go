@@ -195,7 +195,18 @@ func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	if first != "event: snapshot\n" || !strings.Contains(data, `"capacity_bytes":1024`) || !strings.Contains(data, `"start_offset"`) || !strings.Contains(data, `"data_base64"`) {
 		t.Fatalf("snapshot=%q %q", first, data)
 	}
-	if err := os.WriteFile(filepath.Join(root, "workspace", attempt.ID, "release"), []byte("go"), 0o600); err != nil {
+	releasePath := filepath.Join(root, "workspace", attempt.ID, "release")
+	workspaceDeadline := time.Now().Add(time.Second)
+	for {
+		if info, statErr := os.Stat(filepath.Dir(releasePath)); statErr == nil && info.IsDir() {
+			break
+		}
+		if time.Now().After(workspaceDeadline) {
+			t.Fatal("video CLI workspace was not prepared after log subscription")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := os.WriteFile(releasePath, []byte("go"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	foundChunk, foundHeartbeat := false, false

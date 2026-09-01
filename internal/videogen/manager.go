@@ -553,11 +553,14 @@ func (manager *Manager) runScheduled(scheduled videoScheduledAttempt) {
 func (manager *Manager) runHTTP(run *videoAttemptRun) {
 	jobCtx, cancel := context.WithTimeout(run.ctx, run.prepared.JobTimeout)
 	defer cancel()
+	run.lifecycle.Lock()
 	current, ok := manager.GetAttempt(run.attemptID)
 	if !ok || terminalAttemptState(current.State) {
+		run.lifecycle.Unlock()
 		return
 	}
 	updated, err := manager.updateAttempt(run, updateFor(current, AttemptSubmitting))
+	run.lifecycle.Unlock()
 	if err != nil {
 		manager.fail(run, "storage_failure", boundedVideoError(err.Error()))
 		return
@@ -1505,7 +1508,70 @@ func (manager *Manager) SubscribeCLILog(attemptID string) (VideoLogSnapshot, <-c
 	if attempt.ExecutionKind != videoconfig.ExecutionLocalCLI {
 		return VideoLogSnapshot{}, nil, nil, fmt.Errorf("video attempt is not a local CLI attempt")
 	}
-	return manager.cli.SubscribeLog(attemptID)
+	snapshot, chunks, cancel, err := manager.cli.SubscribeLog(attemptID)
+	if err == nil || !errors.Is(err, ErrCLIAttemptNotFound) || terminalAttemptState(attempt.State) {
+		return snapshot, chunks, cancel, err
+	}
+	capacity := 1
+	if attempt.Snapshot.CLIPreset != nil && attempt.Snapshot.CLIPreset.LogBufferBytes > 0 {
+		capacity = attempt.Snapshot.CLIPreset.LogBufferBytes
+	}
+	pendingContext, pendingCancel := context.WithCancel(context.Background())
+	pendingChunks := make(chan VideoLogChunk, videoLogSubscriberCapacity)
+	go manager.forwardPendingCLILog(pendingContext, attemptID, pendingChunks)
+	var once sync.Once
+	return VideoLogSnapshot{CapacityBytes: capacity}, pendingChunks, func() { once.Do(pendingCancel) }, nil
+}
+
+func (manager *Manager) forwardPendingCLILog(ctx context.Context, attemptID string, destination chan<- VideoLogChunk) {
+	defer close(destination)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		snapshot, chunks, cancel, err := manager.cli.SubscribeLog(attemptID)
+		if err == nil {
+			defer cancel()
+			if len(snapshot.Data) > 0 {
+				select {
+				case destination <- VideoLogChunk{Offset: snapshot.StartOffset, Data: snapshot.Data}:
+				case <-ctx.Done():
+					return
+				case <-manager.done:
+					return
+				}
+			}
+			for {
+				select {
+				case chunk, open := <-chunks:
+					if !open {
+						return
+					}
+					select {
+					case destination <- chunk:
+					case <-ctx.Done():
+						return
+					case <-manager.done:
+						return
+					}
+				case <-ctx.Done():
+					return
+				case <-manager.done:
+					return
+				}
+			}
+		}
+		attempt, exists := manager.GetAttempt(attemptID)
+		if !errors.Is(err, ErrCLIAttemptNotFound) || !exists || terminalAttemptState(attempt.State) {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		case <-manager.done:
+			return
+		}
+	}
 }
 
 func (manager *Manager) SaveCLILog(attemptID string) (string, error) {

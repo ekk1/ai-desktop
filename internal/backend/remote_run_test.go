@@ -93,7 +93,15 @@ func TestManagerDoesNotMarkRemoteRunStoppedWhenWorkerDisconnects(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := NewManager(repository, filepath.Join(root, "logs"))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = manager.Shutdown(ctx)
+	})
 	if _, err := manager.Start(context.Background(), created.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := remoteServer.Listener.Close(); err != nil {
 		t.Fatal(err)
 	}
 	remoteServer.CloseClientConnections()

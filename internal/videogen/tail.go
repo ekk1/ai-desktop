@@ -42,6 +42,7 @@ type TailExtraction struct {
 
 type tailRun struct {
 	cancel    context.CancelFunc
+	done      chan struct{}
 	lifecycle sync.Mutex
 	cancelled bool
 	finished  bool
@@ -136,7 +137,7 @@ func (extractor *TailExtractor) Extract(ctx context.Context, sourceAssetID, pres
 		cancel()
 		return extractor.finishWithoutRun(extraction, AttemptCancelled, "shutdown", errors.New("tail extractor is shut down"))
 	}
-	run := &tailRun{cancel: cancel}
+	run := &tailRun{cancel: cancel, done: make(chan struct{})}
 	extractor.runs[extraction.ID] = run
 	extractor.wait.Add(1)
 	extractor.mu.Unlock()
@@ -171,9 +172,23 @@ func (extractor *TailExtractor) CancelExtraction(ctx context.Context, extraction
 	run.lifecycle.Unlock()
 	err := extractor.executor.Stop(ctx, extractionID)
 	if errors.Is(err, ErrCLIAttemptNotRunning) || errors.Is(err, ErrCLIAttemptNotFound) || errors.Is(err, ErrCLIExecutorShutdown) {
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+	if run.done == nil {
 		return nil
 	}
-	return err
+	select {
+	case <-run.done:
+		run.lifecycle.Lock()
+		err = run.err
+		run.lifecycle.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (extractor *TailExtractor) SubscribeExtraction(extractionID string) (TailExtraction, <-chan TailExtraction, func(), error) {
@@ -347,6 +362,7 @@ func (extractor *TailExtractor) prepareWorkspace(extraction TailExtraction, sour
 }
 
 func (extractor *TailExtractor) execute(ctx context.Context, run *tailRun, extraction TailExtraction, preset videoconfig.TailFramePreset, workspace tailWorkspace, command string) {
+	defer close(run.done)
 	defer extractor.wait.Done()
 	defer func() { _ = extractor.cleanupWorkspace(extraction.ID) }()
 	defer func() {
@@ -484,6 +500,10 @@ func (extractor *TailExtractor) complete(extraction *TailExtraction) error {
 }
 
 func (extractor *TailExtractor) finishTailRun(id string, run *tailRun, extraction TailExtraction) {
+	if err := extractor.cleanupWorkspace(id); err != nil {
+		extraction.State = AttemptFailed
+		extraction.Error = AttemptError{Code: "workspace_cleanup", Message: boundedVideoError(err.Error())}
+	}
 	if err := extractor.complete(&extraction); err != nil {
 		run.err, run.finished = err, true
 		extractor.mu.Lock()
