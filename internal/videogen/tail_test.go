@@ -3,7 +3,6 @@
 package videogen
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -48,6 +47,28 @@ func TestTailExtractorAcceptsArchivedRetainedVideo(t *testing.T) {
 	}
 	if got := waitTailTerminal(t, extractor, extraction.ID); got.State != AttemptSucceeded {
 		t.Fatalf("extraction = %#v", got)
+	}
+}
+
+func TestTailExtractorTightensExistingWorkspaceRootPermissions(t *testing.T) {
+	extractor, assets := tailFixture(t, `printf '\x89PNG\r\n\x1a\nfixture' > "$OUTPUT_IMAGE"`)
+	if err := os.MkdirAll(extractor.workspaceRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(extractor.workspaceRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := importFixtureAsset(t, assets, "video/webm")
+	extraction, err := extractor.Extract(context.Background(), source.ID, "tail-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitTailTerminal(t, extractor, extraction.ID); got.State != AttemptSucceeded {
+		t.Fatalf("extraction = %#v", got)
+	}
+	info, err := os.Stat(extractor.workspaceRoot)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("workspace root mode = %v, error = %v, want 0700", info.Mode(), err)
 	}
 }
 
@@ -127,6 +148,23 @@ func TestTailExtractorFailsForCommandAndInvalidOutputWithoutChangingSource(t *te
 	}
 }
 
+func TestTailExtractorReturnsFinalFailedSnapshotForSetupFailure(t *testing.T) {
+	extractor, assets := tailFixture(t, `true`)
+	extractor.workspaceRoot = "relative-tail-workspace"
+	source := importFixtureAsset(t, assets, "video/webm")
+	extraction, err := extractor.Extract(context.Background(), source.ID, "tail-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if extraction.State != AttemptFailed || extraction.CompletedAt == nil || extraction.Error.Code != "workspace" {
+		t.Fatalf("Extract setup failure = %#v", extraction)
+	}
+	persisted, ok := extractor.repository.Get(extraction.ID)
+	if !ok || persisted.State != extraction.State || persisted.Error != extraction.Error || persisted.CompletedAt == nil || !persisted.CompletedAt.Equal(*extraction.CompletedAt) {
+		t.Fatalf("persisted setup failure = %#v, found = %v", persisted, ok)
+	}
+}
+
 func TestTailExtractorCancelsProcessGroupAndSavesLogOnlyOnRequest(t *testing.T) {
 	extractor, assets := tailFixture(t, `printf 'tail-log'; trap 'exit 0' TERM; while :; do sleep 1; done`)
 	source := importFixtureAsset(t, assets, "video/webm")
@@ -153,6 +191,24 @@ func TestTailExtractorCancelsProcessGroupAndSavesLogOnlyOnRequest(t *testing.T) 
 	contents, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(contents), "tail-log") {
 		t.Fatalf("saved log = %q, error = %v", contents, err)
+	}
+}
+
+func TestTailExtractorAcceptsCancellationBeforeExecutorRegistration(t *testing.T) {
+	extractor, _ := tailFixture(t, `true`)
+	created := TailExtraction{ID: strings.Repeat("a", 32), SourceAssetID: strings.Repeat("b", 32), PresetID: "tail-local", State: AttemptQueued, CreatedAt: time.Now().UTC()}
+	if err := extractor.repository.Create(created); err != nil {
+		t.Fatal(err)
+	}
+	runContext, cancel := context.WithCancel(context.Background())
+	extractor.mu.Lock()
+	extractor.runs[created.ID] = &tailRun{cancel: cancel}
+	extractor.mu.Unlock()
+	if err := extractor.CancelExtraction(context.Background(), created.ID); err != nil {
+		t.Fatalf("CancelExtraction before executor registration = %v", err)
+	}
+	if err := runContext.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("run context error = %v, want context.Canceled", err)
 	}
 }
 
@@ -257,6 +313,55 @@ func TestTailExtractorShutdownClosesSubscriptions(t *testing.T) {
 	}
 }
 
+func TestTailExtractorRejectsNewWorkAndSubscriptionsAfterShutdownWithoutSideEffects(t *testing.T) {
+	extractor, assets := tailFixture(t, `printf '\x89PNG\r\n\x1a\nfixture' > "$OUTPUT_IMAGE"`)
+	source := importFixtureAsset(t, assets, "video/webm")
+	if err := extractor.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if extraction, err := extractor.Extract(context.Background(), source.ID, "tail-local"); !errors.Is(err, ErrTailExtractorClosed) || extraction.ID != "" {
+		t.Fatalf("Extract after Shutdown = %#v, %v", extraction, err)
+	}
+	if _, _, _, err := extractor.SubscribeExtraction(strings.Repeat("a", 32)); !errors.Is(err, ErrTailExtractorClosed) {
+		t.Fatalf("SubscribeExtraction after Shutdown error = %v", err)
+	}
+	if got := extractor.repository.List(); len(got) != 0 {
+		t.Fatalf("closed Extract persisted records: %#v", got)
+	}
+	current, _ := assets.Get(source.ID)
+	if len(current.References) != 0 {
+		t.Fatalf("closed Extract added source references: %#v", current.References)
+	}
+	if _, err := os.Stat(extractor.workspaceRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("closed Extract created a workspace root: %v", err)
+	}
+}
+
+func TestTailExtractorShutdownHonorsDeadlineWhileAdmissionIsInProgress(t *testing.T) {
+	extractor, _ := tailFixture(t, `true`)
+	if err := extractor.beginExtract(); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		extractor.starts.Done()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := extractor.Shutdown(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown during admission error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 80*time.Millisecond {
+		t.Fatalf("Shutdown ignored deadline for %s", elapsed)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := extractor.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTailRepositoryOpenInterruptsActiveRecordsAtomically(t *testing.T) {
 	root := t.TempDir()
 	repository, err := OpenTailRepository(filepath.Join(root, "tail-extractions.json"))
@@ -305,6 +410,10 @@ func TestTailRepositoryRejectsInvalidStatesAndMutation(t *testing.T) {
 	created.OutputAssetID = strings.Repeat("f", 32)
 	if err := repository.Update(created); err != nil {
 		t.Fatal(err)
+	}
+	created.Error = AttemptError{Code: "rewritten", Message: "must not change terminal history"}
+	if err := repository.Update(created); err == nil {
+		t.Fatal("Update rewrote a terminal tail extraction")
 	}
 }
 
@@ -367,6 +476,36 @@ func TestTailExtractorRetriesTerminalPersistenceFailure(t *testing.T) {
 	extractor.repository.mu.Unlock()
 	if got := waitTailTerminal(t, extractor, extraction.ID); got.State != AttemptSucceeded || got.OutputAssetID == "" || got.CompletedAt == nil {
 		t.Fatalf("retried extraction = %#v", got)
+	}
+}
+
+func TestTailExtractorRetriesSetupTerminalPersistenceFailure(t *testing.T) {
+	extractor, assets := tailFixture(t, `true`)
+	source := importFixtureAsset(t, assets, "video/webm")
+	created := TailExtraction{ID: strings.Repeat("c", 32), SourceAssetID: source.ID, PresetID: "tail-local", State: AttemptQueued, CreatedAt: time.Now().UTC()}
+	if err := extractor.repository.Create(created); err != nil {
+		t.Fatal(err)
+	}
+	badPath := filepath.Join(t.TempDir(), "repository-directory")
+	if err := os.Mkdir(badPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	extractor.repository.mu.Lock()
+	originalPath := extractor.repository.path
+	extractor.repository.path = badPath
+	extractor.repository.mu.Unlock()
+	failed, err := extractor.finishWithoutRun(created, AttemptFailed, "workspace", errors.New("fixture setup failure"))
+	if err == nil || failed.State != AttemptFailed || failed.CompletedAt == nil {
+		t.Fatalf("finishWithoutRun persistence failure = %#v, %v", failed, err)
+	}
+	if err := extractor.CancelExtraction(context.Background(), created.ID); err == nil {
+		t.Fatal("setup persistence failure has no observable in-memory owner")
+	}
+	extractor.repository.mu.Lock()
+	extractor.repository.path = originalPath
+	extractor.repository.mu.Unlock()
+	if got := waitTailTerminal(t, extractor, created.ID); got.State != AttemptFailed || got.CompletedAt == nil || got.Error.Code != "workspace" {
+		t.Fatalf("retried setup failure = %#v", got)
 	}
 }
 
@@ -471,6 +610,3 @@ func assertTailReference(t *testing.T, assets *asset.Repository, id string, want
 		t.Fatalf("missing reference %#v from %#v", want, item.References)
 	}
 }
-
-var _ = bytes.NewReader
-var _ = errors.Is

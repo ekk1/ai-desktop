@@ -126,6 +126,9 @@ func (repository *TailRepository) Update(extraction TailExtraction) error {
 	if extraction.SourceAssetID != previous.SourceAssetID || extraction.PresetID != previous.PresetID || !extraction.CreatedAt.Equal(previous.CreatedAt) {
 		return fmt.Errorf("tail extraction identity is immutable")
 	}
+	if terminalAttemptState(previous.State) {
+		return fmt.Errorf("terminal tail extraction is immutable")
+	}
 	if !allowedTailTransition(previous.State, extraction.State) {
 		return fmt.Errorf("invalid tail extraction state transition from %q to %q", previous.State, extraction.State)
 	}

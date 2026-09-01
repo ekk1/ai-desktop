@@ -23,6 +23,8 @@ const (
 	tailResultReferenceModule = "video_result"
 )
 
+var ErrTailExtractorClosed = errors.New("tail extractor is closed")
+
 // TailExtraction is the independently persisted lifecycle of one external
 // tail-frame extraction.
 type TailExtraction struct {
@@ -56,18 +58,22 @@ type TailExtractor struct {
 	workspaceRoot string
 	logRoot       string
 
-	mu          sync.Mutex
-	runs        map[string]*tailRun
-	subscribers map[string]map[chan TailExtraction]struct{}
-	failures    map[string]error
-	pending     map[string]TailExtraction
-	shutdown    bool
-	wait        sync.WaitGroup
+	mu           sync.Mutex
+	runs         map[string]*tailRun
+	subscribers  map[string]map[chan TailExtraction]struct{}
+	failures     map[string]error
+	pending      map[string]TailExtraction
+	shutdown     bool
+	starts       sync.WaitGroup
+	wait         sync.WaitGroup
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	shutdownErr  error
 }
 
 func NewTailExtractor(configuration *config.Repository, repository *TailRepository, assets *asset.Repository, executor *CLIExecutor, workspaceRoot, logRoot string) *TailExtractor {
 	return &TailExtractor{config: configuration, repository: repository, assets: assets, executor: executor, workspaceRoot: workspaceRoot, logRoot: logRoot,
-		runs: make(map[string]*tailRun), subscribers: make(map[string]map[chan TailExtraction]struct{}), failures: make(map[string]error), pending: make(map[string]TailExtraction)}
+		runs: make(map[string]*tailRun), subscribers: make(map[string]map[chan TailExtraction]struct{}), failures: make(map[string]error), pending: make(map[string]TailExtraction), shutdownDone: make(chan struct{})}
 }
 
 func (extractor *TailExtractor) Extract(ctx context.Context, sourceAssetID, presetID string) (TailExtraction, error) {
@@ -80,6 +86,10 @@ func (extractor *TailExtractor) Extract(ctx context.Context, sourceAssetID, pres
 	if extractor == nil || extractor.config == nil || extractor.repository == nil || extractor.assets == nil || extractor.executor == nil || strings.TrimSpace(extractor.workspaceRoot) == "" {
 		return TailExtraction{}, fmt.Errorf("tail extractor is not configured")
 	}
+	if err := extractor.beginExtract(); err != nil {
+		return TailExtraction{}, err
+	}
+	defer extractor.starts.Done()
 	source, ok := extractor.assets.Get(sourceAssetID)
 	if !ok {
 		return TailExtraction{}, asset.ErrNotFound
@@ -102,35 +112,23 @@ func (extractor *TailExtractor) Extract(ctx context.Context, sourceAssetID, pres
 	}
 	workspace, err := extractor.prepareWorkspace(extraction, source, preset)
 	if err != nil {
-		if persistErr := extractor.finishWithoutRun(extraction, AttemptFailed, "workspace", err); persistErr != nil {
-			return extraction, persistErr
-		}
-		return extraction, nil
+		return extractor.finishWithoutRun(extraction, AttemptFailed, "workspace", err)
 	}
 	if _, err := extractor.assets.AddReference(source.ID, asset.Reference{Module: tailSourceReferenceModule, RecordID: extraction.ID}); err != nil {
-		if persistErr := extractor.finishWithoutRun(extraction, AttemptFailed, "source_reference", err); persistErr != nil {
-			return extraction, persistErr
-		}
-		return extraction, nil
+		return extractor.finishWithoutRun(extraction, AttemptFailed, "source_reference", err)
 	}
 	command, err := expandTailTemplate(preset.CommandTemplate, map[string]string{
 		"INPUT_VIDEO": workspace.inputPath, "OUTPUT_IMAGE": workspace.outputPath, "ASSET_ID": source.ID,
 	})
 	if err != nil {
-		if persistErr := extractor.finishWithoutRun(extraction, AttemptFailed, "template", err); persistErr != nil {
-			return extraction, persistErr
-		}
-		return extraction, nil
+		return extractor.finishWithoutRun(extraction, AttemptFailed, "template", err)
 	}
 	runContext, cancel := context.WithCancel(context.Background())
 	extractor.mu.Lock()
 	if extractor.shutdown {
 		extractor.mu.Unlock()
 		cancel()
-		if persistErr := extractor.finishWithoutRun(extraction, AttemptCancelled, "shutdown", errors.New("tail extractor is shut down")); persistErr != nil {
-			return extraction, persistErr
-		}
-		return extraction, nil
+		return extractor.finishWithoutRun(extraction, AttemptCancelled, "shutdown", errors.New("tail extractor is shut down"))
 	}
 	run := &tailRun{cancel: cancel}
 	extractor.runs[extraction.ID] = run
@@ -165,7 +163,7 @@ func (extractor *TailExtractor) CancelExtraction(ctx context.Context, extraction
 	run.cancel()
 	run.lifecycle.Unlock()
 	err := extractor.executor.Stop(ctx, extractionID)
-	if errors.Is(err, ErrCLIAttemptNotRunning) || errors.Is(err, ErrCLIExecutorShutdown) {
+	if errors.Is(err, ErrCLIAttemptNotRunning) || errors.Is(err, ErrCLIAttemptNotFound) || errors.Is(err, ErrCLIExecutorShutdown) {
 		return nil
 	}
 	return err
@@ -174,6 +172,9 @@ func (extractor *TailExtractor) CancelExtraction(ctx context.Context, extraction
 func (extractor *TailExtractor) SubscribeExtraction(extractionID string) (TailExtraction, <-chan TailExtraction, func(), error) {
 	extractor.mu.Lock()
 	defer extractor.mu.Unlock()
+	if extractor.shutdown {
+		return TailExtraction{}, nil, nil, ErrTailExtractorClosed
+	}
 	extraction, ok := extractor.repository.Get(extractionID)
 	if !ok {
 		return TailExtraction{}, nil, nil, ErrTailExtractionNotFound
@@ -217,38 +218,61 @@ func (extractor *TailExtractor) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("tail extraction shutdown context is nil")
 	}
+	extractor.shutdownOnce.Do(func() {
+		extractor.mu.Lock()
+		extractor.shutdown = true
+		for extractionID, subscribers := range extractor.subscribers {
+			for subscriber := range subscribers {
+				close(subscriber)
+			}
+			delete(extractor.subscribers, extractionID)
+		}
+		extractor.mu.Unlock()
+		go extractor.shutdownBackground()
+	})
+	select {
+	case <-extractor.shutdownDone:
+		extractor.mu.Lock()
+		err := extractor.shutdownErr
+		extractor.mu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (extractor *TailExtractor) shutdownBackground() {
+	var joined error
+	extractor.starts.Wait()
 	extractor.mu.Lock()
-	extractor.shutdown = true
 	ids := make([]string, 0, len(extractor.runs))
 	for id := range extractor.runs {
 		ids = append(ids, id)
 	}
-	for extractionID, subscribers := range extractor.subscribers {
-		for subscriber := range subscribers {
-			close(subscriber)
-		}
-		delete(extractor.subscribers, extractionID)
-	}
 	extractor.mu.Unlock()
-	var joined error
 	for _, id := range ids {
-		if err := extractor.CancelExtraction(ctx, id); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if err := extractor.CancelExtraction(context.Background(), id); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			joined = errors.Join(joined, err)
 		}
 	}
-	done := make(chan struct{})
-	go func() { extractor.wait.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		joined = errors.Join(joined, ctx.Err())
-	}
+	extractor.wait.Wait()
 	extractor.mu.Lock()
 	for _, err := range extractor.failures {
 		joined = errors.Join(joined, err)
 	}
+	extractor.shutdownErr = joined
 	extractor.mu.Unlock()
-	return joined
+	close(extractor.shutdownDone)
+}
+
+func (extractor *TailExtractor) beginExtract() error {
+	extractor.mu.Lock()
+	defer extractor.mu.Unlock()
+	if extractor.shutdown {
+		return ErrTailExtractorClosed
+	}
+	extractor.starts.Add(1)
+	return nil
 }
 
 type tailWorkspace struct {
@@ -263,6 +287,9 @@ func (extractor *TailExtractor) prepareWorkspace(extraction TailExtraction, sour
 	}
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return tailWorkspace{}, fmt.Errorf("create tail workspace root: %w", err)
+	}
+	if err := os.Chmod(base, 0o700); err != nil {
+		return tailWorkspace{}, fmt.Errorf("protect tail workspace root: %w", err)
 	}
 	if err := os.Mkdir(root, 0o700); err != nil {
 		return tailWorkspace{}, fmt.Errorf("create tail workspace: %w", err)
@@ -405,12 +432,22 @@ func (extractor *TailExtractor) monitorPID(extractionID string, done <-chan stru
 	}
 }
 
-func (extractor *TailExtractor) finishWithoutRun(extraction TailExtraction, state AttemptState, code string, cause error) error {
+func (extractor *TailExtractor) finishWithoutRun(extraction TailExtraction, state AttemptState, code string, cause error) (TailExtraction, error) {
 	extraction.State = state
 	extraction.Error = AttemptError{Code: code, Message: boundedVideoError(cause.Error())}
 	now := time.Now().UTC()
 	extraction.CompletedAt = &now
-	return extractor.updateAndPublish(extraction)
+	if err := extractor.updateAndPublish(extraction); err != nil {
+		run := &tailRun{finished: true, err: err}
+		extractor.mu.Lock()
+		extractor.runs[extraction.ID] = run
+		extractor.failures[extraction.ID] = err
+		extractor.pending[extraction.ID] = cloneTailExtraction(extraction)
+		extractor.mu.Unlock()
+		go extractor.retryPendingTerminal(extraction.ID, run)
+		return extraction, err
+	}
+	return extraction, nil
 }
 
 func (extractor *TailExtractor) complete(extraction *TailExtraction) error {
