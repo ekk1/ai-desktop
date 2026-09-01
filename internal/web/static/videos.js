@@ -114,6 +114,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   let logEventSource = null;
   let logAttemptID = "";
   let logBytes = new Uint8Array();
+  let logCapacityBytes = 0;
   let logStartOffset = 0;
   let logEndOffset = 0;
   let clearOffset = 0;
@@ -1042,15 +1043,25 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     return joined;
   }
 
+  function retainLogWindow(left, right, endOffset, capacityBytes) {
+    if (!Number.isSafeInteger(capacityBytes) || capacityBytes < 1) throw new Error("日志保留容量无效");
+    const keptRight = right.length >= capacityBytes ? right.slice(right.length - capacityBytes) : right;
+    const leftBudget = capacityBytes - keptRight.length;
+    const keptLeft = left.length > leftBudget ? left.slice(left.length - leftBudget) : left;
+    const bytes = appendBytes(keptLeft, keptRight);
+    return { bytes, startOffset: endOffset - bytes.length };
+  }
+
   function renderLog() {
     const visibleOffset = Math.max(clearOffset, logStartOffset);
     const start = Math.min(logBytes.length, Math.max(0, visibleOffset - logStartOffset));
     ui.cliLog.textContent = logDecoder.decode(logBytes.slice(start));
   }
 
-  function validLogSnapshot(startOffset, endOffset, byteLength) {
+  function validLogSnapshot(startOffset, endOffset, byteLength, capacityBytes) {
     return Number.isSafeInteger(startOffset) && Number.isSafeInteger(endOffset) && startOffset >= 0 &&
-      endOffset >= startOffset && endOffset - startOffset === byteLength;
+      endOffset >= startOffset && endOffset - startOffset === byteLength &&
+      Number.isSafeInteger(capacityBytes) && capacityBytes >= 1 && byteLength <= capacityBytes;
   }
 
   function scheduleLogReconnect(attemptID) {
@@ -1080,13 +1091,16 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     const bytes = base64Bytes(payload.data_base64);
     const startOffset = Number(payload.start_offset);
     const endOffset = Number(payload.end_offset);
-    if (!validLogSnapshot(startOffset, endOffset, bytes.length)) {
+    const capacityBytes = Number(payload.capacity_bytes);
+    if (!validLogSnapshot(startOffset, endOffset, bytes.length, capacityBytes)) {
       invalidateLogStream("日志快照 offset 或字节长度无效；已丢弃并重新订阅权威快照。");
       return;
     }
-    logStartOffset = startOffset;
+    const retained = retainLogWindow(new Uint8Array(), bytes, endOffset, capacityBytes);
+    logCapacityBytes = capacityBytes;
+    logStartOffset = retained.startOffset;
     logEndOffset = endOffset;
-    logBytes = bytes;
+    logBytes = retained.bytes;
     logAwaitingSnapshot = false;
     logReconnectDelay = 250;
     renderLog();
@@ -1111,8 +1125,10 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       return;
     } else {
       const overlap = Math.max(0, logEndOffset - startOffset);
-      logBytes = appendBytes(logBytes, bytes.slice(overlap));
       logEndOffset = chunkEnd;
+      const retained = retainLogWindow(logBytes, bytes.slice(overlap), logEndOffset, logCapacityBytes);
+      logBytes = retained.bytes;
+      logStartOffset = retained.startOffset;
     }
     renderLog();
   }
@@ -1161,6 +1177,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     logEventSource = null;
     logAttemptID = "";
     logBytes = new Uint8Array();
+    logCapacityBytes = 0;
     logStartOffset = 0;
     logEndOffset = 0;
     clearOffset = 0;
@@ -1173,6 +1190,8 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     if (!logAttemptID) return;
     clearOffset = logEndOffset;
     logClearOffsets.set(logAttemptID, clearOffset);
+    logBytes = new Uint8Array();
+    logStartOffset = logEndOffset;
     renderLog();
     ui.cliPath.textContent = "仅清除了当前浏览器显示；服务端原始日志保持不变。";
   }
@@ -1317,13 +1336,16 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     const bytes = base64Bytes(payload.data_base64);
     const startOffset = Number(payload.start_offset);
     const endOffset = Number(payload.end_offset);
-    if (!validLogSnapshot(startOffset, endOffset, bytes.length)) {
+    const capacityBytes = Number(payload.capacity_bytes);
+    if (!validLogSnapshot(startOffset, endOffset, bytes.length, capacityBytes)) {
       invalidateTailLogStream(view, "日志快照 offset 或字节长度无效；已丢弃并重新订阅权威快照。");
       return;
     }
-    view.startOffset = startOffset;
+    const retained = retainLogWindow(new Uint8Array(), bytes, endOffset, capacityBytes);
+    view.capacityBytes = capacityBytes;
+    view.startOffset = retained.startOffset;
     view.endOffset = endOffset;
-    view.bytes = bytes;
+    view.bytes = retained.bytes;
     view.awaitingSnapshot = false;
     view.reconnectDelay = 250;
     view.status.textContent = `显示绝对 offset ${startOffset}–${endOffset}；清屏仅影响当前浏览器。`;
@@ -1349,8 +1371,10 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
       return;
     }
     const overlap = Math.max(0, view.endOffset - startOffset);
-    view.bytes = appendBytes(view.bytes, bytes.slice(overlap));
     view.endOffset = chunkEnd;
+    const retained = retainLogWindow(view.bytes, bytes.slice(overlap), view.endOffset, view.capacityBytes);
+    view.bytes = retained.bytes;
+    view.startOffset = retained.startOffset;
     renderTailLog(view);
   }
 
@@ -1380,6 +1404,8 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
   function clearTailLogLocally(view) {
     view.clearOffset = view.endOffset;
     tailLogClearOffsets.set(view.id, view.clearOffset);
+    view.bytes = new Uint8Array();
+    view.startOffset = view.endOffset;
     renderTailLog(view);
     view.status.textContent = "仅清除了当前浏览器显示；服务端原始 Tail 日志保持不变。";
   }
@@ -1406,6 +1432,7 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
         reconnectDelay: 250,
         awaitingSnapshot: true,
         bytes: new Uint8Array(),
+        capacityBytes: 0,
         startOffset: 0,
         endOffset: 0,
         clearOffset: tailLogClearOffsets.get(extraction.id) ?? 0,

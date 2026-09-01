@@ -543,7 +543,7 @@ func TestEmbeddedVideoWorkspaceReviewFixContracts(t *testing.T) {
 	script := getBody(t, "/assets/videos.js")
 	for _, behavior := range []string{
 		`function reconcileSelectedCLIAssets(previous, pickerAssets)`,
-		`function validLogSnapshot(startOffset, endOffset, byteLength)`,
+		`function validLogSnapshot(startOffset, endOffset, byteLength, capacityBytes)`,
 		`function invalidateLogStream(message)`,
 		`logAwaitingSnapshot`, `scheduleLogReconnect`,
 		`const tailExtractionsBySource = new Map()`,
@@ -584,7 +584,7 @@ func TestEmbeddedVideoWorkspaceReviewFixContracts(t *testing.T) {
 
 	snapshot := section("function receiveLogSnapshot", "function receiveLogChunk")
 	validationAt := strings.Index(snapshot, "if (!validLogSnapshot")
-	mutationAt := strings.Index(snapshot, "logStartOffset = startOffset")
+	mutationAt := strings.Index(snapshot, "const retained = retainLogWindow")
 	if validationAt < 0 || mutationAt < 0 || validationAt > mutationAt || !strings.Contains(snapshot, "invalidateLogStream") || !strings.Contains(snapshot, "return;") {
 		t.Error("log snapshot must be validated and rejected before authoritative offsets are mutated")
 	}
@@ -741,12 +741,12 @@ func TestEmbeddedVideoWorkspaceFinalFixCContracts(t *testing.T) {
 	}
 
 	tailSnapshot := section("function receiveTailLogSnapshot", "function receiveTailLogChunk")
-	validationAt, mutationAt := strings.Index(tailSnapshot, "if (!validLogSnapshot"), strings.Index(tailSnapshot, "view.startOffset = startOffset")
+	validationAt, mutationAt := strings.Index(tailSnapshot, "if (!validLogSnapshot"), strings.Index(tailSnapshot, "const retained = retainLogWindow")
 	if validationAt < 0 || mutationAt < 0 || validationAt > mutationAt || !strings.Contains(tailSnapshot[:mutationAt], "invalidateTailLogStream") {
 		t.Error("Tail log snapshots must reject malformed absolute offsets before mutating the view")
 	}
 	tailChunk := section("function receiveTailLogChunk", "function connectTailLog")
-	gapAt, mutationAt := strings.Index(tailChunk, "startOffset > view.endOffset"), strings.Index(tailChunk, "view.bytes = appendBytes")
+	gapAt, mutationAt := strings.Index(tailChunk, "startOffset > view.endOffset"), strings.Index(tailChunk, "const retained = retainLogWindow")
 	if gapAt < 0 || mutationAt < 0 || gapAt > mutationAt || !strings.Contains(tailChunk[:mutationAt], "invalidateTailLogStream") {
 		t.Error("Tail log gaps must invalidate and reconnect before any byte mutation")
 	}
@@ -760,6 +760,33 @@ func TestEmbeddedVideoWorkspaceFinalFixCContracts(t *testing.T) {
 	clearAt, rememberAt, renderAt := strings.Index(tailClear, "view.clearOffset = view.endOffset"), strings.Index(tailClear, "tailLogClearOffsets.set"), strings.Index(tailClear, "renderTailLog(view)")
 	if clearAt < 0 || rememberAt < clearAt || renderAt < rememberAt || strings.Contains(tailClear, "request(") {
 		t.Error("Tail log clear must advance and remember only the browser offset before rerendering")
+	}
+	for name, source := range map[string]string{
+		"CLI snapshot":  section("function receiveLogSnapshot", "function receiveLogChunk"),
+		"Tail snapshot": section("function receiveTailLogSnapshot", "function receiveTailLogChunk"),
+	} {
+		if !strings.Contains(source, "capacity_bytes") || !strings.Contains(source, "retainLogWindow") {
+			t.Errorf("%s must apply the authoritative retained capacity", name)
+		}
+	}
+	for name, check := range map[string]struct {
+		source string
+		start  string
+	}{
+		"CLI chunk":  {section("function receiveLogChunk", "function connectAttemptLog"), "logStartOffset = retained.startOffset"},
+		"Tail chunk": {section("function receiveTailLogChunk", "function connectTailLog"), "view.startOffset = retained.startOffset"},
+	} {
+		if !strings.Contains(check.source, "retainLogWindow") || !strings.Contains(check.source, check.start) {
+			t.Errorf("%s must keep the bounded window and its absolute start offset", name)
+		}
+	}
+	for name, source := range map[string]string{
+		"CLI clear":  section("function clearAttemptLogLocally", "async function saveAttemptLog"),
+		"Tail clear": tailClear,
+	} {
+		if !strings.Contains(source, "new Uint8Array()") {
+			t.Errorf("%s must release browser-retained hidden bytes", name)
+		}
 	}
 	renderResults := section("function renderResults", "async function setAssetState")
 	closeAt, replaceAt := strings.Index(renderResults, "closeTailLogs()"), strings.Index(renderResults, "ui.resultList.replaceChildren()")

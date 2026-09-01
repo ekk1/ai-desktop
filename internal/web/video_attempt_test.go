@@ -192,7 +192,7 @@ func TestVideoCLILogSSEUsesRawOffsetsAndHeartbeat(t *testing.T) {
 	first, _ := reader.ReadString('\n')
 	data, _ := reader.ReadString('\n')
 	_, _ = reader.ReadString('\n')
-	if first != "event: snapshot\n" || !strings.Contains(data, `"start_offset"`) || !strings.Contains(data, `"data_base64"`) {
+	if first != "event: snapshot\n" || !strings.Contains(data, `"capacity_bytes":1024`) || !strings.Contains(data, `"start_offset"`) || !strings.Contains(data, `"data_base64"`) {
 		t.Fatalf("snapshot=%q %q", first, data)
 	}
 	if err := os.WriteFile(filepath.Join(root, "workspace", attempt.ID, "release"), []byte("go"), 0o600); err != nil {

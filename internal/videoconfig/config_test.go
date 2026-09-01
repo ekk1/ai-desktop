@@ -40,7 +40,6 @@ func TestConfigRejectsNonCanonicalOrUnsupportedCLIOutputAndManagedDefaults(t *te
 	cfg.CLIPresets = []CLIPreset{validCLIPreset()}
 	for _, mutate := range []func(*CLIPreset){
 		func(p *CLIPreset) { p.OutputRelativePath = "outputs/a/../result.webm" },
-		func(p *CLIPreset) { p.OutputMediaType, p.OutputExtension = "video/mp4", ".mp4" },
 		func(p *CLIPreset) { p.OutputMediaType, p.OutputExtension = "image/webp; profile=animated", ".webp" },
 		func(p *CLIPreset) { p.DefaultParams = json.RawMessage(`{"batch_count":2}`) },
 	} {
@@ -66,6 +65,8 @@ func TestConfigAcceptsExecutableCLIOutputDeclarations(t *testing.T) {
 		{mediaType: "image/webp", extension: ".webp"},
 		{mediaType: "video/x-msvideo", extension: ".avi"},
 		{mediaType: "video/avi", extension: ".avi"},
+		{mediaType: "video/mp4", extension: ".mp4"},
+		{mediaType: "video/quicktime", extension: ".mov"},
 	} {
 		cfg := Default()
 		preset := validCLIPreset()

@@ -409,6 +409,10 @@ func validVideoOutputDeclaration(mediaType, extension string) bool {
 	switch strings.ToLower(parsed) {
 	case "video/webm":
 		return extension == ".webm"
+	case "video/mp4":
+		return extension == ".mp4"
+	case "video/quicktime":
+		return extension == ".mov"
 	case "video/x-msvideo", "video/avi":
 		return extension == ".avi"
 	case "image/webp":

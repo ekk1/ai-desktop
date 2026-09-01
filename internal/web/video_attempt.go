@@ -280,10 +280,11 @@ func writeVideoEvent(w http.ResponseWriter, e videogen.AttemptEvent) error {
 }
 func writeVideoLogSnapshot(w http.ResponseWriter, s videogen.VideoLogSnapshot) error {
 	b, err := json.Marshal(struct {
-		StartOffset int64  `json:"start_offset"`
-		EndOffset   int64  `json:"end_offset"`
-		DataBase64  string `json:"data_base64"`
-	}{s.StartOffset, s.EndOffset, base64.StdEncoding.EncodeToString(s.Data)})
+		CapacityBytes int    `json:"capacity_bytes"`
+		StartOffset   int64  `json:"start_offset"`
+		EndOffset     int64  `json:"end_offset"`
+		DataBase64    string `json:"data_base64"`
+	}{s.CapacityBytes, s.StartOffset, s.EndOffset, base64.StdEncoding.EncodeToString(s.Data)})
 	if err != nil {
 		return err
 	}

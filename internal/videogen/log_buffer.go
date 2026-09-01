@@ -6,9 +6,10 @@ const videoLogSubscriberCapacity = 64
 
 // VideoLogSnapshot is a retained window in an attempt's absolute log stream.
 type VideoLogSnapshot struct {
-	StartOffset int64
-	EndOffset   int64
-	Data        []byte
+	CapacityBytes int
+	StartOffset   int64
+	EndOffset     int64
+	Data          []byte
 }
 
 // VideoLogChunk is one raw write and its absolute stream offset.
@@ -101,8 +102,9 @@ func (buffer *videoLogBuffer) subscribeWithSnapshot() (VideoLogSnapshot, <-chan 
 
 func (buffer *videoLogBuffer) snapshotLocked() VideoLogSnapshot {
 	return VideoLogSnapshot{
-		StartOffset: buffer.startOffset,
-		EndOffset:   buffer.endOffset,
-		Data:        append([]byte(nil), buffer.data...),
+		CapacityBytes: buffer.capacity,
+		StartOffset:   buffer.startOffset,
+		EndOffset:     buffer.endOffset,
+		Data:          append([]byte(nil), buffer.data...),
 	}
 }

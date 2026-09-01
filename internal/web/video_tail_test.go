@@ -371,11 +371,12 @@ func TestVideoTailLogSSEUsesRawOffsetsHeartbeatAndRequestCancellation(t *testing
 	reader := bufio.NewReader(response.Body)
 	eventName, data, heartbeat := readVideoSSEFrame(t, reader)
 	var snapshot struct {
-		StartOffset int64  `json:"start_offset"`
-		EndOffset   int64  `json:"end_offset"`
-		DataBase64  string `json:"data_base64"`
+		CapacityBytes int    `json:"capacity_bytes"`
+		StartOffset   int64  `json:"start_offset"`
+		EndOffset     int64  `json:"end_offset"`
+		DataBase64    string `json:"data_base64"`
 	}
-	if eventName != "snapshot" || heartbeat || json.Unmarshal(data, &snapshot) != nil || snapshot.StartOffset != 0 || snapshot.EndOffset != 0 || snapshot.DataBase64 != "" {
+	if eventName != "snapshot" || heartbeat || json.Unmarshal(data, &snapshot) != nil || snapshot.CapacityBytes != 64<<10 || snapshot.StartOffset != 0 || snapshot.EndOffset != 0 || snapshot.DataBase64 != "" {
 		t.Fatalf("snapshot event=%q heartbeat=%v data=%s decoded=%#v", eventName, heartbeat, data, snapshot)
 	}
 	if err := os.WriteFile(filepath.Join(root, "video-workspace", "tail-"+created.ID, "release"), []byte("go"), 0o600); err != nil {

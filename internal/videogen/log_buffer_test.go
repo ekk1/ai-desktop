@@ -12,8 +12,8 @@ func TestVideoLogBufferTracksAbsoluteOffsetsAndCopiesSnapshots(t *testing.T) {
 	_, _ = buffer.Write([]byte("67890"))
 
 	snapshot := buffer.snapshot()
-	if snapshot.StartOffset != 2 || snapshot.EndOffset != 10 || string(snapshot.Data) != "34567890" {
-		t.Fatalf("snapshot = %#v, want offsets [2,10) and data %q", snapshot, "34567890")
+	if snapshot.CapacityBytes != 8 || snapshot.StartOffset != 2 || snapshot.EndOffset != 10 || string(snapshot.Data) != "34567890" {
+		t.Fatalf("snapshot = %#v, want capacity 8, offsets [2,10), and data %q", snapshot, "34567890")
 	}
 	snapshot.Data[0] = 'X'
 	if got := string(buffer.snapshot().Data); got != "34567890" {
