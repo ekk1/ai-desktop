@@ -55,8 +55,19 @@ func TestRunServerBindsLoopbackAndStopsManagedProcess(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not shut down")
 	}
-	if err := syscall.Kill(-run.PID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("managed process group %d remains: %v", run.PID, err)
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := syscall.Kill(-run.PID, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("inspect managed process group %d: %v", run.PID, err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("managed process group %d remains", run.PID)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

@@ -136,12 +136,14 @@ func TestImageAttemptSSEWritesSnapshotHeartbeatAndDisconnects(t *testing.T) {
 		handler.events(response, request, batch.ID)
 	}))
 	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer response.Body.Close()
 	reader := bufio.NewReader(response.Body)
 	event, _ := reader.ReadString('\n')
 	data, _ := reader.ReadString('\n')
@@ -149,9 +151,26 @@ func TestImageAttemptSSEWritesSnapshotHeartbeatAndDisconnects(t *testing.T) {
 	if event != "event: snapshot\n" || !strings.Contains(data, attempt.ID) {
 		t.Fatalf("snapshot = %q%q", event, data)
 	}
-	heartbeat, err := reader.ReadString('\n')
-	if err != nil || heartbeat != ": heartbeat\n" {
-		t.Fatalf("heartbeat = %q, error = %v", heartbeat, err)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			t.Fatalf("read heartbeat: %v", readErr)
+		}
+		if line == ": heartbeat\n" {
+			if blank, blankErr := reader.ReadString('\n'); blankErr != nil || blank != "\n" {
+				t.Fatalf("heartbeat terminator = %q, error = %v", blank, blankErr)
+			}
+			break
+		}
+		if !strings.HasPrefix(line, "event: ") {
+			t.Fatalf("unexpected SSE line before heartbeat: %q", line)
+		}
+		if _, readErr = reader.ReadString('\n'); readErr != nil {
+			t.Fatalf("read intervening SSE data: %v", readErr)
+		}
+		if blank, blankErr := reader.ReadString('\n'); blankErr != nil || blank != "\n" {
+			t.Fatalf("intervening SSE terminator = %q, error = %v", blank, blankErr)
+		}
 	}
 	cancel()
 	_ = response.Body.Close()

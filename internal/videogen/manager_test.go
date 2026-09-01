@@ -244,6 +244,13 @@ func TestManagerRetainsImportedHTTPAssetWhenAttachmentFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.waitForState(created.ID, AttemptPolling)
+	jobEntered, releaseJob := fixture.remote.blockCompletedVideo(validWebM(), "video/webm", 16, 2)
+	t.Cleanup(releaseJob)
+	select {
+	case <-jobEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager did not read the completed video job")
+	}
 	backupPath := filepath.Join(fixture.service.repository.root, batch.ID, "batch.json.bak")
 	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
@@ -251,8 +258,8 @@ func TestManagerRetainsImportedHTTPAssetWhenAttachmentFails(t *testing.T) {
 	if err := os.Mkdir(backupPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	fixture.remote.completeVideo(validWebM(), "video/webm", 16, 2)
-	deadline := time.Now().Add(time.Second)
+	releaseJob()
+	deadline := time.Now().Add(3 * time.Second)
 	imported := false
 	for {
 		for _, stored := range fixture.assets.List(asset.Filter{}) {
@@ -491,10 +498,23 @@ func TestManagerCancelContextStopsBlockedRemoteCancellationPromptly(t *testing.T
 		t.Fatal(err)
 	}
 	fixture.waitForState(created.ID, AttemptPolling)
+	cancelEntered := fixture.remote.observeCancel()
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- fixture.manager.CancelContext(ctx, created.ID) }()
+	select {
+	case <-cancelEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("remote cancellation was not attempted")
+	}
 	started := time.Now()
-	err = fixture.manager.CancelContext(ctx, created.ID)
+	cancel()
+	select {
+	case err = <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("CancelContext did not stop promptly after request cancellation")
+	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("CancelContext error = %v, want context.Canceled", err)
 	}
@@ -1099,7 +1119,10 @@ type videoRemoteFake struct {
 	cancelErr   error
 	cancelDelay time.Duration
 	cancels     int
+	cancelEntry chan struct{}
 	jobs        int
+	jobEntered  chan struct{}
+	jobRelease  chan struct{}
 }
 
 func (remote *videoRemoteFake) setJobStatus(status string, position int) {
@@ -1130,6 +1153,13 @@ func (remote *videoRemoteFake) setCancelDelay(delay time.Duration) {
 	remote.mu.Lock()
 	remote.cancelDelay = delay
 	remote.mu.Unlock()
+}
+
+func (remote *videoRemoteFake) observeCancel() <-chan struct{} {
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	remote.cancelEntry = make(chan struct{}, 1)
+	return remote.cancelEntry
 }
 
 func newVideoRemoteFake() *videoRemoteFake {
@@ -1167,11 +1197,30 @@ func (remote *videoRemoteFake) Submit(ctx context.Context, _ videoconfig.HTTPPro
 
 func (remote *videoRemoteFake) Job(_ context.Context, _ videoconfig.HTTPProvider, jobID string) (sdcpp.VideoJob, error) {
 	remote.mu.Lock()
-	defer remote.mu.Unlock()
 	remote.jobs++
 	job := remote.completed
 	job.ID = jobID
+	entered, release := remote.jobEntered, remote.jobRelease
+	remote.mu.Unlock()
+	if release != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}
 	return job, nil
+}
+
+func (remote *videoRemoteFake) blockCompletedVideo(contents []byte, mediaType string, fps, frames int) (<-chan struct{}, func()) {
+	remote.mu.Lock()
+	remote.completed = completedVideoJob("job", contents, mediaType, fps, frames)
+	remote.jobEntered = make(chan struct{}, 1)
+	remote.jobRelease = make(chan struct{})
+	entered, release := remote.jobEntered, remote.jobRelease
+	remote.mu.Unlock()
+	var once sync.Once
+	return entered, func() { once.Do(func() { close(release) }) }
 }
 
 func (remote *videoRemoteFake) jobCount() int {
@@ -1183,8 +1232,14 @@ func (remote *videoRemoteFake) jobCount() int {
 func (remote *videoRemoteFake) Cancel(ctx context.Context, _ videoconfig.HTTPProvider, _ string) error {
 	remote.mu.Lock()
 	remote.cancels++
-	delay, err := remote.cancelDelay, remote.cancelErr
+	delay, err, entry := remote.cancelDelay, remote.cancelErr, remote.cancelEntry
 	remote.mu.Unlock()
+	if entry != nil {
+		select {
+		case entry <- struct{}{}:
+		default:
+		}
+	}
 	if delay > 0 {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
