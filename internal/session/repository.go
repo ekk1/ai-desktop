@@ -43,7 +43,9 @@ func OpenRepository(root string) (*Repository, error) {
 		}
 		var workspace Workspace
 		path := filepath.Join(root, entry.Name(), "workspace.json")
-		if err := store.ReadJSON(path, &workspace); err != nil {
+		if err := store.ReadJSONWithBackup(path, &workspace, 0o600, func() error {
+			return validateWorkspace(workspace, entry.Name())
+		}); err != nil {
 			return nil, fmt.Errorf("load session %q: %w", entry.Name(), err)
 		}
 		if err := validateWorkspace(workspace, entry.Name()); err != nil {

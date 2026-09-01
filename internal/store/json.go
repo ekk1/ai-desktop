@@ -8,11 +8,18 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 )
+
+var ErrInvalidJSON = errors.New("invalid JSON document")
 
 // WriteJSON atomically replaces path with an indented JSON document. If path
 // already exists, its previous contents are retained at path + ".bak".
 func WriteJSON(path string, value any, perm fs.FileMode) (err error) {
+	return writeJSON(path, value, perm, true)
+}
+
+func writeJSON(path string, value any, perm fs.FileMode, backup bool) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create JSON directory %q: %w", dir, err)
@@ -43,8 +50,10 @@ func WriteJSON(path string, value any, perm fs.FileMode) (err error) {
 		return fmt.Errorf("close temporary JSON for %q: %w", path, err)
 	}
 
-	if err := preserveBackup(path, perm); err != nil {
-		return err
+	if backup {
+		if err := preserveBackup(path, perm); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace JSON %q: %w", path, err)
@@ -57,6 +66,52 @@ func WriteJSON(path string, value any, perm fs.FileMode) (err error) {
 
 // ReadJSON decodes exactly one JSON document from path.
 func ReadJSON(path string, value any) error {
+	return readJSON(path, value)
+}
+
+// ReadJSONWithBackup reads and validates the primary document. It consults
+// path + ".bak" only when the primary is syntactically invalid, and restores
+// the validated backup without overwriting it.
+func ReadJSONWithBackup(path string, value any, perm fs.FileMode, validate func() error) error {
+	primaryErr := readFreshJSON(path, value)
+	if primaryErr == nil {
+		if validate != nil {
+			return validate()
+		}
+		return nil
+	}
+	if !errors.Is(primaryErr, ErrInvalidJSON) {
+		return primaryErr
+	}
+	backupPath := path + ".bak"
+	if err := readFreshJSON(backupPath, value); err != nil {
+		return fmt.Errorf("%w; read JSON backup %q: %v", primaryErr, backupPath, err)
+	}
+	if validate != nil {
+		if err := validate(); err != nil {
+			return errors.Join(primaryErr, fmt.Errorf("validate JSON backup %q: %w", backupPath, err))
+		}
+	}
+	if err := writeJSON(path, value, perm, false); err != nil {
+		return errors.Join(primaryErr, fmt.Errorf("restore JSON backup %q: %w", backupPath, err))
+	}
+	return nil
+}
+
+func readFreshJSON(path string, value any) error {
+	target := reflect.ValueOf(value)
+	if target.Kind() != reflect.Pointer || target.IsNil() {
+		return fmt.Errorf("JSON target must be a non-nil pointer")
+	}
+	fresh := reflect.New(target.Elem().Type())
+	if err := readJSON(path, fresh.Interface()); err != nil {
+		return err
+	}
+	target.Elem().Set(fresh.Elem())
+	return nil
+}
+
+func readJSON(path string, value any) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open JSON %q: %w", path, err)
@@ -65,14 +120,14 @@ func ReadJSON(path string, value any) error {
 
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(value); err != nil {
-		return fmt.Errorf("decode JSON %q: %w", path, err)
+		return fmt.Errorf("%w: decode JSON %q: %v", ErrInvalidJSON, path, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return fmt.Errorf("decode JSON %q: multiple JSON values", path)
+			return fmt.Errorf("%w: decode JSON %q: multiple JSON values", ErrInvalidJSON, path)
 		}
-		return fmt.Errorf("decode trailing JSON %q: %w", path, err)
+		return fmt.Errorf("%w: decode trailing JSON %q: %v", ErrInvalidJSON, path, err)
 	}
 	return nil
 }

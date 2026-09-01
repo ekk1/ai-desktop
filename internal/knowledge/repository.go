@@ -31,7 +31,12 @@ type Repository struct {
 
 func OpenRepository(path string) (*Repository, error) {
 	stored := document{}
-	err := store.ReadJSON(path, &stored)
+	err := store.ReadJSONWithBackup(path, &stored, 0o600, func() error {
+		if stored.SchemaVersion != schemaVersion {
+			return fmt.Errorf("knowledge schema version %d is unsupported", stored.SchemaVersion)
+		}
+		return nil
+	})
 	if errors.Is(err, os.ErrNotExist) {
 		stored = document{SchemaVersion: schemaVersion, Notes: []Note{}}
 		if err := store.WriteJSON(path, stored, 0o600); err != nil {

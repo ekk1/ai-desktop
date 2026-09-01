@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,5 +67,83 @@ func TestReadJSONRejectsTrailingJSONValue(t *testing.T) {
 	var got testDocument
 	if err := ReadJSON(path, &got); err == nil {
 		t.Fatal("ReadJSON accepted a second JSON value")
+	}
+}
+
+func TestReadJSONWithBackupValidatesAndRestoresCorruptPrimary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.json")
+	backup := testDocument{SchemaVersion: 1, Name: "last-good"}
+	newer := testDocument{SchemaVersion: 1, Name: "newer"}
+	if err := WriteJSON(path, backup, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteJSON(path, newer, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var recovered testDocument
+	err := ReadJSONWithBackup(path, &recovered, 0o600, func() error {
+		if recovered.SchemaVersion != 1 || recovered.Name == "" {
+			return fmt.Errorf("invalid test document")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered != backup {
+		t.Fatalf("recovered = %#v, want %#v", recovered, backup)
+	}
+	var restored testDocument
+	if err := ReadJSON(path, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored != backup {
+		t.Fatalf("restored primary = %#v, want %#v", restored, backup)
+	}
+	var preserved testDocument
+	if err := ReadJSON(path+".bak", &preserved); err != nil {
+		t.Fatal(err)
+	}
+	if preserved != backup {
+		t.Fatalf("preserved backup = %#v, want %#v", preserved, backup)
+	}
+}
+
+func TestReadJSONWithBackupDoesNotMaskValidUnsupportedPrimary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := WriteJSON(path, testDocument{SchemaVersion: 1, Name: "supported"}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unsupported := testDocument{SchemaVersion: 99, Name: "future"}
+	if err := WriteJSON(path, unsupported, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var got testDocument
+	err := ReadJSONWithBackup(path, &got, 0o600, func() error {
+		if got.SchemaVersion != 1 {
+			return fmt.Errorf("unsupported schema %d", got.SchemaVersion)
+		}
+		return nil
+	})
+	if err == nil || got != unsupported {
+		t.Fatalf("read = %#v, error = %v; want unsupported primary", got, err)
+	}
+}
+
+func TestReadJSONWithBackupDoesNotClassifyMissingBackupAsMissingPrimary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":1`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var got testDocument
+	err := ReadJSONWithBackup(path, &got, 0o600, nil)
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %v, want corruption without missing-primary classification", err)
 	}
 }

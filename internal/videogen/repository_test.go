@@ -3,6 +3,8 @@ package videogen
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -56,6 +58,45 @@ func TestRepositoryPersistsOrderedVideoItems(t *testing.T) {
 	persisted, ok := reopened.Get(batch.ID)
 	if !ok || !reflect.DeepEqual(storedBatch(t, repository, batch.ID), persisted) {
 		t.Fatalf("reopened = %#v", persisted)
+	}
+}
+
+func TestRepositoryRecoversValidatedBatchBackupAfterPrimaryCorruption(t *testing.T) {
+	root := t.TempDir()
+	repository, err := OpenRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := repository.CreateBatch(validBatchInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.UpdateBatch(created.ID, UpdateBatchInput{
+		Title: "newer", ExecutionKind: created.ExecutionKind, PresetID: created.PresetID,
+		Concurrency: created.Concurrency, CommonParams: created.CommonParams, Timing: created.Timing,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, created.ID, "batch.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":1`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, exists := reopened.Get(created.ID)
+	if !exists || recovered.Title != created.Title {
+		t.Fatalf("recovered batch = %#v, exists = %v; want title %q", recovered, exists, created.Title)
+	}
+	var restored batchDocument
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(contents, &restored); err != nil || restored.Batch.Title != created.Title {
+		t.Fatalf("restored batch = %#v, error = %v", restored.Batch, err)
 	}
 }
 

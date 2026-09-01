@@ -33,7 +33,9 @@ type Repository struct {
 
 func OpenRepository(path string) (*Repository, error) {
 	document := profileDocument{}
-	err := store.ReadJSON(path, &document)
+	err := store.ReadJSONWithBackup(path, &document, 0o600, func() error {
+		return validateProfileDocument(document)
+	})
 	if errors.Is(err, os.ErrNotExist) {
 		document = profileDocument{SchemaVersion: profileSchemaVersion, Profiles: []Profile{}}
 		if err := store.WriteJSON(path, document, 0o600); err != nil {
@@ -51,20 +53,31 @@ func OpenRepository(path string) (*Repository, error) {
 			return nil, fmt.Errorf("save migrated backend profiles: %w", err)
 		}
 	}
-	seen := make(map[string]struct{}, len(document.Profiles))
-	for _, profile := range document.Profiles {
+	if err := validateProfileDocument(document); err != nil {
+		return nil, err
+	}
+	return &Repository{path: path, profiles: cloneProfiles(document.Profiles)}, nil
+}
+
+func validateProfileDocument(document profileDocument) error {
+	candidate := profileDocument{SchemaVersion: document.SchemaVersion, Profiles: cloneProfiles(document.Profiles)}
+	if _, err := migrateProfileDocument(&candidate); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(candidate.Profiles))
+	for _, profile := range candidate.Profiles {
 		if profile.ID == "" {
-			return nil, fmt.Errorf("backend profile has an empty ID")
+			return fmt.Errorf("backend profile has an empty ID")
 		}
 		if _, exists := seen[profile.ID]; exists {
-			return nil, fmt.Errorf("duplicate backend profile ID %q", profile.ID)
+			return fmt.Errorf("duplicate backend profile ID %q", profile.ID)
 		}
 		seen[profile.ID] = struct{}{}
 		if err := profile.Validate(); err != nil {
-			return nil, fmt.Errorf("validate backend profile %q: %w", profile.ID, err)
+			return fmt.Errorf("validate backend profile %q: %w", profile.ID, err)
 		}
 	}
-	return &Repository{path: path, profiles: cloneProfiles(document.Profiles)}, nil
+	return nil
 }
 
 func (repository *Repository) List() []Profile {

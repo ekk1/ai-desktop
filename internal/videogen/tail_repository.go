@@ -37,7 +37,9 @@ func OpenTailRepository(path string) (*TailRepository, error) {
 		return nil, fmt.Errorf("create tail extraction directory: %w", err)
 	}
 	document := tailExtractionDocument{}
-	err := store.ReadJSON(path, &document)
+	err := store.ReadJSONWithBackup(path, &document, 0o600, func() error {
+		return validateTailExtractionDocument(document)
+	})
 	if errors.Is(err, os.ErrNotExist) {
 		document = tailExtractionDocument{SchemaVersion: tailExtractionSchemaVersion, Extractions: []TailExtraction{}}
 		if err := store.WriteJSON(path, document, 0o600); err != nil {
@@ -46,8 +48,8 @@ func OpenTailRepository(path string) (*TailRepository, error) {
 	} else if err != nil {
 		return nil, fmt.Errorf("read tail extraction repository: %w", err)
 	}
-	if document.SchemaVersion != tailExtractionSchemaVersion {
-		return nil, fmt.Errorf("tail extraction schema version %d is unsupported", document.SchemaVersion)
+	if err := validateTailExtractionDocument(document); err != nil {
+		return nil, err
 	}
 	repository := &TailRepository{path: path, extractions: make(map[string]TailExtraction, len(document.Extractions))}
 	changed := false
@@ -73,6 +75,23 @@ func OpenTailRepository(path string) (*TailRepository, error) {
 		}
 	}
 	return repository, nil
+}
+
+func validateTailExtractionDocument(document tailExtractionDocument) error {
+	if document.SchemaVersion != tailExtractionSchemaVersion {
+		return fmt.Errorf("tail extraction schema version %d is unsupported", document.SchemaVersion)
+	}
+	seen := make(map[string]struct{}, len(document.Extractions))
+	for _, extraction := range document.Extractions {
+		if err := validateTailExtraction(extraction); err != nil {
+			return err
+		}
+		if _, duplicate := seen[extraction.ID]; duplicate {
+			return fmt.Errorf("duplicate tail extraction %q", extraction.ID)
+		}
+		seen[extraction.ID] = struct{}{}
+	}
+	return nil
 }
 
 func (repository *TailRepository) Create(extraction TailExtraction) error {

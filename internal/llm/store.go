@@ -57,7 +57,12 @@ func OpenRunStore(sessionsRoot string) (*RunStore, error) {
 			}
 			var document runDocument
 			path := filepath.Join(runsDirectory, entry.Name())
-			if err := store.ReadJSON(path, &document); err != nil {
+			if err := store.ReadJSONWithBackup(path, &document, 0o600, func() error {
+				if document.SchemaVersion != runSchemaVersion || document.Run.ID != runID || document.Run.SessionID != sessionEntry.Name() {
+					return fmt.Errorf("run %q has invalid schema or identity", runID)
+				}
+				return validateRun(document.Run)
+			}); err != nil {
 				return nil, fmt.Errorf("load run %q: %w", runID, err)
 			}
 			if document.SchemaVersion != runSchemaVersion || document.Run.ID != runID || document.Run.SessionID != sessionEntry.Name() {

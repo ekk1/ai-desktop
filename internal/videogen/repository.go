@@ -47,7 +47,10 @@ func OpenRepository(root string) (*Repository, error) {
 			continue
 		}
 		var document batchDocument
-		if err := store.ReadJSON(filepath.Join(root, entry.Name(), "batch.json"), &document); err != nil {
+		path := filepath.Join(root, entry.Name(), "batch.json")
+		if err := store.ReadJSONWithBackup(path, &document, 0o600, func() error {
+			return validateDocument(document, entry.Name())
+		}); err != nil {
 			return nil, fmt.Errorf("load video batch %q: %w", entry.Name(), err)
 		}
 		if err := validateDocument(document, entry.Name()); err != nil {

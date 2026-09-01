@@ -46,7 +46,12 @@ func OpenRepository(indexPath, filesDir string) (*Repository, error) {
 		return nil, fmt.Errorf("create asset files directory: %w", err)
 	}
 	stored := document{}
-	err := store.ReadJSON(indexPath, &stored)
+	err := store.ReadJSONWithBackup(indexPath, &stored, 0o600, func() error {
+		if stored.SchemaVersion != assetSchemaVersion {
+			return fmt.Errorf("asset schema version %d is unsupported", stored.SchemaVersion)
+		}
+		return nil
+	})
 	if errors.Is(err, os.ErrNotExist) {
 		stored = document{SchemaVersion: assetSchemaVersion, Assets: []Asset{}}
 		if err := store.WriteJSON(indexPath, stored, 0o600); err != nil {

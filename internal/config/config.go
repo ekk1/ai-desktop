@@ -74,7 +74,23 @@ func ResolveDataDir(explicit string) (string, error) {
 
 func Load(path string) (Config, error) {
 	var cfg Config
-	err := store.ReadJSON(path, &cfg)
+	err := store.ReadJSONWithBackup(path, &cfg, 0o600, func() error {
+		candidate := cfg
+		if candidate.SchemaVersion > CurrentSchemaVersion {
+			return fmt.Errorf("config schema version %d is newer than supported version %d", candidate.SchemaVersion, CurrentSchemaVersion)
+		}
+		if candidate.SchemaVersion < CurrentSchemaVersion {
+			var err error
+			candidate, err = migrate(candidate)
+			if err != nil {
+				return err
+			}
+		}
+		if err := candidate.Validate(); err != nil {
+			return fmt.Errorf("validate config %q: %w", path, err)
+		}
+		return nil
+	})
 	if errors.Is(unwrapPathError(err), os.ErrNotExist) {
 		cfg = Default()
 		if err := Save(path, cfg); err != nil {
