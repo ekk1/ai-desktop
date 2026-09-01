@@ -121,6 +121,47 @@ func TestRepositoryDoesNotRestoreInvalidAssetBackup(t *testing.T) {
 	}
 }
 
+func TestRepositoryRejectsInvalidDocumentsBeforePersisting(t *testing.T) {
+	root := t.TempDir()
+	indexPath := filepath.Join(root, "index.json")
+	filesDir := filepath.Join(root, "files")
+	repository, err := OpenRepository(indexPath, filesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Import(ImportInput{
+		Reader: strings.NewReader("invalid"), DisplayName: "invalid.bin", MediaType: "not a media type",
+	}); err == nil {
+		t.Fatal("Import accepted an invalid media type")
+	}
+	if items := repository.List(Filter{}); len(items) != 0 {
+		t.Fatalf("invalid import was retained: %#v", items)
+	}
+
+	created, err := repository.Import(ImportInput{
+		Reader: strings.NewReader("valid"), DisplayName: "valid.txt", MediaType: "text/plain",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.UpdateMetadata(created.ID, "..", "invalid"); err == nil {
+		t.Fatal("UpdateMetadata accepted an invalid display name")
+	}
+	unchanged, ok := repository.Get(created.ID)
+	if !ok || unchanged.DisplayName != "valid.txt" {
+		t.Fatalf("asset changed after rejected update: %#v, %v", unchanged, ok)
+	}
+
+	reopened, err := OpenRepository(indexPath, filesDir)
+	if err != nil {
+		t.Fatalf("reopen after rejected writes: %v", err)
+	}
+	got, ok := reopened.Get(created.ID)
+	if !ok || got.DisplayName != "valid.txt" {
+		t.Fatalf("reopened asset = %#v, %v", got, ok)
+	}
+}
+
 func TestDeleteProtectsReferencesAndRemovesLastPhysicalContent(t *testing.T) {
 	repository := newTestRepository(t)
 	contents := []byte("same bytes")

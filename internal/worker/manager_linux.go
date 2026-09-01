@@ -35,6 +35,7 @@ type managedProcess struct {
 	run             Run
 	stopRequested   bool
 	failureReason   string
+	cleanupErr      error
 	readinessCancel context.CancelFunc
 }
 
@@ -121,6 +122,7 @@ func (manager *Manager) Start(ctx context.Context, request StartRequest) (Run, e
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
 	command.Stdout = logBuffer
 	command.Stderr = logBuffer
+	command.WaitDelay = 100 * time.Millisecond
 	startedAt := time.Now().UTC()
 	process := &managedProcess{
 		cmd:  command,
@@ -188,7 +190,7 @@ func (manager *Manager) Stop(ctx context.Context, runID string) (Run, error) {
 	defer timer.Stop()
 	select {
 	case <-done:
-		return manager.finalizeStoppedRun(runID, pid)
+		return manager.currentRun(runID)
 	case <-ctx.Done():
 		return manager.killAndWait(runID, pid, done, ctx.Err())
 	case <-timer.C:
@@ -198,10 +200,9 @@ func (manager *Manager) Stop(ctx context.Context, runID string) (Run, error) {
 	}
 	select {
 	case <-done:
-		return manager.finalizeStoppedRun(runID, pid)
+		return manager.currentRun(runID)
 	case <-ctx.Done():
-		run, waitErr := manager.waitAfterKill(runID, done, ctx.Err())
-		return run, errors.Join(waitErr, ensureProcessGroupStopped(pid))
+		return manager.waitAfterKill(runID, done, ctx.Err())
 	}
 }
 
@@ -262,6 +263,10 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 
 func (manager *Manager) wait(process *managedProcess) {
 	err := process.cmd.Wait()
+	if errors.Is(err, exec.ErrWaitDelay) && process.cmd.ProcessState.Success() {
+		err = nil
+	}
+	cleanupErr := ensureProcessGroupStopped(process.run.PID)
 	endedAt := time.Now().UTC()
 	exitCode := process.cmd.ProcessState.ExitCode()
 
@@ -272,6 +277,7 @@ func (manager *Manager) wait(process *managedProcess) {
 	}
 	process.run.EndedAt = &endedAt
 	process.run.ExitCode = &exitCode
+	process.cleanupErr = cleanupErr
 	switch {
 	case process.stopRequested:
 		process.run.State = StateStopped
@@ -405,7 +411,7 @@ func (manager *Manager) currentRun(runID string) (Run, error) {
 	if manager.current.run.RunID != runID {
 		return Run{}, ErrRunMismatch
 	}
-	return manager.runWithLogOffsetsLocked(manager.current), nil
+	return manager.runWithLogOffsetsLocked(manager.current), manager.current.cleanupErr
 }
 
 func (manager *Manager) runWithLogOffsetsLocked(process *managedProcess) Run {
@@ -422,12 +428,7 @@ func (manager *Manager) killAndWait(runID string, pid int, done <-chan struct{},
 		killErr = nil
 	}
 	run, waitErr := manager.waitAfterKill(runID, done, prior)
-	return run, errors.Join(killErr, waitErr, ensureProcessGroupStopped(pid))
-}
-
-func (manager *Manager) finalizeStoppedRun(runID string, pid int) (Run, error) {
-	run, runErr := manager.currentRun(runID)
-	return run, errors.Join(runErr, ensureProcessGroupStopped(pid))
+	return run, errors.Join(killErr, waitErr)
 }
 
 func (manager *Manager) waitAfterKill(runID string, done <-chan struct{}, prior error) (Run, error) {

@@ -309,7 +309,11 @@ func (repository *Repository) update(id string, change func(*Asset)) (Asset, err
 }
 
 func (repository *Repository) save(assets []Asset) error {
-	return store.WriteJSON(repository.indexPath, document{SchemaVersion: assetSchemaVersion, Assets: assets}, 0o600)
+	stored := document{SchemaVersion: assetSchemaVersion, Assets: assets}
+	if err := validateDocument(stored); err != nil {
+		return err
+	}
+	return store.WriteJSON(repository.indexPath, stored, 0o600)
 }
 
 func safeExtension(mediaType, displayName string) string {
