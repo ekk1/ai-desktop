@@ -56,7 +56,7 @@ go build -o ai-worker ./cmd/ai-worker
 可通过链接参数写入版本号：
 
 ```bash
-go build -ldflags '-X main.version=0.1.0' -o ai-workbench ./cmd/ai-workbench
+go build -ldflags '-X main.version=1.0.0' -o ai-workbench ./cmd/ai-workbench
 ./ai-workbench --version
 ```
 
