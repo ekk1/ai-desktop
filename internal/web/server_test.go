@@ -637,9 +637,29 @@ func TestEmbeddedVideoWorkspaceReviewFixContracts(t *testing.T) {
 	}
 
 	enter := section("async function enter()", "function leave()")
-	activeGuardAt, activateAt := strings.Index(enter, "if (active) return;"), strings.Index(enter, "active = true;")
-	if activeGuardAt < 0 || activateAt < 0 || activeGuardAt > activateAt {
-		t.Error("enter must return before any reload or dirty-state mutation when the workspace is already active")
+	activeGuardAt := strings.Index(enter, "if (active) {")
+	firstShellAt := strings.Index(enter, "showWorkspaceShell();")
+	returnAt := strings.Index(enter, "return;")
+	activateAt := strings.Index(enter, "active = true;")
+	lastShellAt := strings.LastIndex(enter, "showWorkspaceShell();")
+	if activeGuardAt < 0 || firstShellAt < activeGuardAt || returnAt < firstShellAt || activateAt < returnAt || lastShellAt <= activateAt {
+		t.Error("active enter must restore the shell before returning, while initial enter restores it before loading")
+	}
+	shell := section("function showWorkspaceShell()", "async function enter()")
+	for _, marker := range []string{
+		"ui.sidebarControls.hidden = false", `document.querySelector("#sidebar-content").replaceChildren(ui.sidebarControls)`,
+		"ui.sidebarSearch.disabled = false", `ui.sidebarSearch.placeholder = "搜索视频批次标题或文件夹"`, "ui.workspace.hidden = false",
+	} {
+		if !strings.Contains(shell, marker) {
+			t.Errorf("video shell restoration is incomplete: missing %s", marker)
+		}
+	}
+
+	appScript := getBody(t, "/assets/app.js")
+	sidebarResetAt := strings.Index(appScript, "sidebarContent.replaceChildren();")
+	videoEnterAt := strings.Index(appScript, "videoWorkspaceController.enter();")
+	if sidebarResetAt < 0 || videoEnterAt < 0 || sidebarResetAt > videoEnterAt {
+		t.Error("module selection contract must account for the shared sidebar reset before video enter")
 	}
 }
 

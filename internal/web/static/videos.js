@@ -1364,15 +1364,22 @@ export function createVideoWorkspace({ openAssetPicker, readAPIError }) {
     } catch (error) { setStatus(`保存尾帧日志失败：${error.message}`, true); }
   }
 
-  async function enter() {
-    if (active) return;
-    active = true;
-    const version = ++loadVersion;
+  function showWorkspaceShell() {
     ui.sidebarControls.hidden = false;
     document.querySelector("#sidebar-content").replaceChildren(ui.sidebarControls);
     ui.sidebarSearch.disabled = false;
     ui.sidebarSearch.placeholder = "搜索视频批次标题或文件夹";
     ui.workspace.hidden = false;
+  }
+
+  async function enter() {
+    if (active) {
+      showWorkspaceShell();
+      return;
+    }
+    active = true;
+    const version = ++loadVersion;
+    showWorkspaceShell();
     ui.batchListStatus.textContent = "正在读取视频批次…";
     batchDraftDirty = false;
     try {
