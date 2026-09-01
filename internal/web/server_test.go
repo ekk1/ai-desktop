@@ -275,6 +275,12 @@ func TestEmbeddedVideoConfigExposesProgressivePresetEditors(t *testing.T) {
 	if strings.Contains(script, `command_template: "extract-tail --output {{OUTPUT_PATH}}"`) {
 		t.Error("tail-frame default must not use the CLI OUTPUT_PATH template token")
 	}
+	if !strings.Contains(script, `command_template: "generate-video --output {{OUTPUT_PATH}}"`) {
+		t.Error("CLI default must use the OUTPUT_PATH template token")
+	}
+	if strings.Contains(script, `command_template: "generate-video --output {{OUTPUT_IMAGE}}"`) {
+		t.Error("CLI default must not use the tail-frame OUTPUT_IMAGE template token")
+	}
 	if !strings.Contains(getBody(t, "/assets/app.js"), `createVideoConfig`) {
 		t.Error("app does not wire createVideoConfig")
 	}
