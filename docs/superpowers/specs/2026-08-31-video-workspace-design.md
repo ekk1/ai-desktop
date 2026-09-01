@@ -2,7 +2,7 @@
 
 **日期：** 2026-08-31
 
-**状态：** 已批准，待实施
+**状态：** 已交付
 
 ## 1. 目标与范围
 
@@ -29,7 +29,7 @@
 
 ## 2. stable-diffusion.cpp 能力结论
 
-截至 2026-08-31，官方异步 Server 已提供 `POST /sdcpp/v1/vid_gen`、Job 查询和取消接口。HTTP 视频请求支持 T2V、首帧、尾帧、有序控制帧、Prompt、Negative Prompt、尺寸、Seed、FPS、帧数、常规与 High-noise Sample Params、LoRA、VAE Tiling、Cache 和 VACE Strength；响应提供编码后的视频容器、MIME、FPS 和实际帧数。官方输出格式为 WebM、Animated WebP 和 MJPG AVI，其中 WebM/WebP 取决于编译选项。[Server API](https://github.com/leejet/stable-diffusion.cpp/blob/master/examples/server/api.md) [Server 路由能力](https://github.com/leejet/stable-diffusion.cpp/blob/master/examples/server/routes_sdcpp.cpp) [构建说明](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/build.md)
+截至 2026-09-01 再次核对，官方异步 Server 仍提供 `GET /sdcpp/v1/capabilities`、`POST /sdcpp/v1/vid_gen`、Job 查询和取消接口，并明确 capabilities 按模式返回、单次 Job 只生成一条序列。HTTP 视频请求支持 T2V、首帧、尾帧、有序控制帧、Prompt、Negative Prompt、尺寸、Seed、FPS、帧数、常规与 High-noise Sample Params、LoRA、VAE Tiling、Cache 和 VACE Strength；响应提供编码后的视频容器、MIME、FPS 和实际帧数。官方输出格式为 WebM、Animated WebP 和 MJPG AVI，其中 WebM/WebP 取决于编译选项。[Server API](https://github.com/leejet/stable-diffusion.cpp/blob/master/examples/server/api.md) [Server 路由能力](https://github.com/leejet/stable-diffusion.cpp/blob/master/examples/server/routes_sdcpp.cpp) [构建说明](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/build.md)
 
 当前 HTTP 缺口同样明确：`vid_gen` 不接受 `ref_images`、`ref_video`、参考音频、配对音轨、Mask、单张 Control Image 或 IP Adapter Image；单个 Job 只返回一条视频；生成开始后 Server 不支持真正取消，只能取消仍在队列中的 Job；Capabilities 是模式级而非模型级，不能证明当前模型支持某个高级条件。请求帧数还可能被模型规则归一化，因此必须保存响应中的实际帧数。[Server API](https://github.com/leejet/stable-diffusion.cpp/blob/master/examples/server/api.md) [运行时实现](https://github.com/leejet/stable-diffusion.cpp/blob/master/examples/server/runtime.cpp)
 
@@ -235,3 +235,34 @@ API 分为：视频配置、文件夹/Batch CRUD、Item CRUD/排序、运行/重
 ## 14. 验收标准
 
 用户可以创建独立的视频 Batch，批量配置 Prompt、时长/FPS/帧数及首尾/控制素材，通过 stable-diffusion.cpp HTTP 生成常规视频；也可以用本机自定义 CLI 模板和固定工作区执行 `ref_video` 等高级流程。成功视频自动归档到 Asset 库，用户可手动提取尾帧、精选并继续下一次生成。所有高级参数与日志保持折叠，工作台不需要 Fork stable-diffusion.cpp，也不会把素材交给远端 Worker。
+
+## 15. 交付记录（2026-09-01）
+
+阶段 7 已按独立视频领域交付。实际实现使用主配置 Schema 4，提供 HTTP Provider、`local_cli` Preset、Tail Frame Preset、Batch/Item/Attempt 持久化、SSE、原始日志、固定工作区、共享 Asset 引用以及原生响应式页面。HTTP Provider 运行时可修改 Headers、默认参数和各项资源上限；Capabilities 查询只作为 `vid_gen` 模式提示。CLI Attempt 使用 `<data-dir>/video-workspace/<attempt-id>`；Tail 在同一受控根下短暂使用 `tail-<extraction-id>`，正常成功、失败或取消路径会尝试清理。CLI 日志手动保存到 `video-logs/`，Tail 日志手动保存到 `videos/tail-logs/`。
+
+真实实现差异与当前限制如下；这些记录不修改前文已批准的目标：
+
+- 视频页面同时编辑 Batch Timing 和 Item `timing_override`；Item 可明确继承 Batch，或独立选择帧数/时长与 FPS。点击尾帧“作为首帧”时，页面明确显示目标 Item，先把 archive Asset 设为 active，再打开需要显式保存的现有或新 Item 草稿。
+- 出于规范 Asset 不可变性，实际实现没有采用前文“优先硬链接”的优化，而是对 CLI/Tail 输入始终做校验后的私有复制；受信任命令即使原地改写输入也不会改变 Asset 库中的规范文件。
+- HTTP 单次 Attempt 只接收并导入一个官方结果。`ref_video`、参考音频等 Server 未支持的输入仍由本机 CLI Preset 解释；工作台不内置模型命令、`ffmpeg` 或转码器，也未使用真实 GPU 模型评价生成质量。
+- HTTP 记录请求 FPS、请求帧数和 Server 返回的实际帧数，不擅自应用模型的 `4n+1` 等规则。HTTP 输出仅接受声明与内容一致的 WebM、Animated WebP 或 MJPG AVI；自定义本机 CLI 还接受 ISO BMFF `ftyp` 校验的 MP4/MOV。CLI 与 Tail 都执行精确路径、大小和基础魔数校验。
+- CLI/Tail 日志只存在当前工作台进程的有界内存中，通过原始 Base64 字节、绝对 offset 和重连快照在折叠视图显示；快照携带权威保留容量，浏览器连续追加时也只保留这个最新字节窗口。浏览器清屏会释放本地旧字节而不改变 Server 端流，只有手动保存才落盘。CLI 终态工作区保留到用户确认清理，清理不删除已导入 Asset；Tail 临时工作区在正常成功、失败或取消路径清理。工作台进程硬崩溃或删除失败仍可能留下 `tail-<extraction-id>`；没有跨进程所有权/锁协议前不做启动时自动扫描，以免误删另一实例的活动目录。
+- Remote Worker 不运行 Video CLI/Tail，也不传输 Asset、Prompt 或结果。云端模型 Server 只能通过独立 SSH 隧道端口供 HTTP Provider 访问。
+
+已接受的生命周期边界保持为：离开视频模块只关闭 EventSource/Timer，不取消运行；用户取消已开始且 Server 返回 HTTP 409 的任务时继续轮询并显示 `remote_cannot_cancel`；正常关闭会停止本机 CLI/Tail 进程组，对已知远端 Job 尝试取消，并停止本地轮询，重开数据目录时残留活动记录转为 `interrupted`。视频与尾帧结果先导入 `archive`，只有切换到 `active` 才进入跨模块 Picker。
+
+聚焦 fixture 验收使用真实 `httptest` HTTP Server 和短生命周期 Linux Bash 进程，命令为：
+
+```bash
+go test ./internal/sdcpp ./internal/videogen ./internal/app -run '^(TestVideoClientSubmitsAndReadsCompletedVideoJob|TestHTTPAssemblerInjectsFramesInOrderWithoutSnapshotBase64|TestHTTPAssemblerUsesItemTimingAndManagedMedia|TestManagerImportsHTTPVideoAndRecordsActualFrames|TestManagerRunsCLIWorkspaceAndImportsDeclaredVideo|TestManagerSavesCLILogAndCleansTerminalWorkspace|TestManagerCancelsCLIProcessAttempt|TestCLIExecutorRunsPrepareThenMainAndStopsProcessGroup|TestCLIExecutorRetainsOffsetLogsAndSavesOnlyOnRequest|TestWorkspacePreparesOrderedSelectedAssetsAndManifest|TestTailExtractorImportsArchiveImageAndReferencesSource|TestTailExtractorCancelsProcessGroupAndSavesLogOnlyOnRequest|TestApplicationShutsDownSharedVideoCLIAndTailExecutor)$' -count=1 -v
+```
+
+上述 13 项测试全部通过：覆盖 HTTP Body 中的 Prompt/FPS/Frames/有序图片、官方提交/轮询和 archive 导入；CLI 准备→主命令、只含所选 Asset 的有序 Manifest、精确 `OUTPUT_PATH`、原始 offset 日志、手动保存、取消和进程组停止；Tail PNG archive 导入、引用、状态、日志和取消；以及 App 共享执行器关闭后两个进程组均不存在。
+
+最终全分支审查又增加 15 项聚焦回归，覆盖规范 Asset 在暂存输入被覆盖后仍保持不变、Tail 终态/部分初始化目录清理和日志订阅、保存时拒绝托管参数/越界 Timing/不可执行输出声明、请求 Context 取消及生命周期锁上限、Item Timing 往返、Tail 原始日志 SSE，以及前端严格 Base64/明确目标契约。这些回归与原有 fixture 一起通过。
+
+最终复审的跟进回归进一步确认：配置保存接受执行器已支持的 MP4/MOV 精确声明；CLI/Tail SSE 快照携带真实日志容量；页面在连续 chunk、重连快照和本地清屏后都保持绝对 offset，并只保留最新容量窗口。独立 scoped re-review 将两个跟进 Important 均判为已解决，没有新增 Critical/Important。
+
+修复后的全量验收结果：`gofmt -l cmd internal` 无输出；`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build` 两个二进制和 `git diff --check` 均退出 0。构建后的工作台在临时数据目录和随机回环端口启动，`/api/v1/health` 返回 `{"status":"ok","version":"dev"}`，`/`、`/assets/videos.js`、`/api/v1/videos/config` 均返回并包含预期页面、控制器和 Provider 数据；发送 `SIGTERM` 后进程退出、监听释放，临时目录已删除。
+
+本验收环境未安装 Chromium、Chrome、Firefox 或其他浏览器可执行文件，也没有 Node。因此没有声称完成 1440px/390px 实际浏览器渲染；已通过 Go 静态资源契约测试、响应式 CSS 源码审查和上述真实 HTTP 页面交付检查，正式人工视口验收仍需在有浏览器的环境执行。

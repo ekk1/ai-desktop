@@ -2,7 +2,7 @@
 
 一个面向 Linux 本地 AI 工作流的单体 Web 工作台。后端仅使用 Go 标准库，前端仅使用原生 HTML、CSS 和 JavaScript，最终构建为一个内嵌页面资源的二进制。
 
-当前已完成基础骨架、后端管理、远端进程 Worker、共享资产、知识备忘录、LLM 完整请求工作区和生图工作区：
+当前已完成基础骨架、后端管理、远端进程 Worker、共享资产、知识备忘录、LLM 完整请求工作区、生图工作区和视频工作区：
 
 - 固定监听 `127.0.0.1` 的 HTTP Server
 - 可覆盖的数据目录和监听端口
@@ -32,8 +32,12 @@
 - 带文件夹的生图批次、完整参数 JSON、批量 Prompt 和单项覆盖
 - 有限并发、不可变 Attempt 快照、SSE 状态、取消、重试与中断恢复
 - 五类图片 Asset 输入、结果自动归档和一键精选
+- stable-diffusion.cpp 原生异步 Video Provider 与模式感知 capabilities
+- 独立视频批次、时长/帧数换算、首尾/控制帧和单项覆盖
+- 受信任的本机视频 CLI、固定工作区、原始日志和精确输出校验
+- 外部尾帧提取、归档/精选以及继续作为下一条视频首帧
 
-远端进程 Worker 已按[独立设计](docs/superpowers/specs/2026-08-31-remote-worker-design.md)交付。下一阶段按[视频工作区设计](docs/superpowers/specs/2026-08-31-video-workspace-design.md)接入视频生成。Worker 只经 SSH 隧道控制一个云端进程组，不传输 Prompt、Asset 或结果；生成请求通过另一条隧道直达模型 Server。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
+远端进程 Worker 已按[独立设计](docs/superpowers/specs/2026-08-31-remote-worker-design.md)交付，[视频工作区](docs/superpowers/specs/2026-08-31-video-workspace-design.md)也已接入。Worker 只经 SSH 隧道控制一个云端进程组，不传输 Prompt、Asset 或结果；生成请求通过另一条隧道直达模型 Server。已交付的 [LLM](docs/superpowers/specs/2026-08-30-llm-workspace-design.md) 与[生图](docs/superpowers/specs/2026-08-30-image-workspace-design.md)行为分别记录在独立设计中。
 
 ## 要求
 
@@ -227,6 +231,41 @@ Item 可从 active 精选库选择 init、refs、mask、control 和 IP Adapter �
 ```
 
 每次运行和重试都会新增 Attempt；其中执行快照不可变，状态和远端进度会持续更新，旧历史不会被重试覆盖。状态包括 `queued`、`submitting`、`polling`、`succeeded`、`failed`、`cancelled` 和 `interrupted`，浏览器通过工作台 SSE 实时更新。工作台重启后，遗留的活动 Attempt 会标为 `interrupted`，不会猜测远端状态或自动重发；需要时手动重试即可。
+
+## 视频工作区
+
+视频与生图使用独立的配置、Batch、Item、参数和 Attempt。默认 HTTP Provider 的 Base URL 为 `http://127.0.0.1:1234`，工作台向它调用 stable-diffusion.cpp 原生异步接口：`POST /sdcpp/v1/vid_gen`，再通过 `/sdcpp/v1/jobs/<id>` 查询或取消。Provider 可在“配置”中运行时维护固定 Headers、默认参数 JSON、连接/任务超时、轮询间隔、并发数以及请求、错误、输入图片和输出视频上限；“读取 capabilities”根据当前/支持模式判断 `vid_gen` 是否可用，并展示模式专用输出格式与功能提示，不会用模式级结果推断当前模型一定支持某个高级条件。
+
+HTTP Provider 只负责生成请求，不拉起模型 Server。可以在“后端管理”中自行启停 `sd-server`，也可以把 Base URL 指向 SSH 隧道映射到本机的云端模型 Server 端口。官方接口与当前视频模型能力请以 [stable-diffusion.cpp Server API](https://github.com/leejet/stable-diffusion.cpp/blob/master/examples/server/api.md)、[Wan 指南](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/wan.md)、[MiniMax-H3 指南](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/minimax_h3.md)和 [LTX 指南](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/ltx2.md)为准；工作台不复制或固定容易变化的 Server/模型启动参数。
+
+打开顶部“视频”后，可自行填写 Batch 标题、文件夹、执行类型和预设。批量添加时每个非空 Prompt 行成为一个有序 Item；公共参数、时长/FPS 或帧数、并发数由 Batch 提供，每个 Item 还能覆盖 Timing、Negative Prompt、参数和输入素材。Item Timing 可选择继承 Batch、直接帧数或时长/FPS；时长模式按 `ceil(duration_seconds × fps)` 得到请求帧数，和直接帧数模式互斥。请求帧数与 Server 返回的实际帧数都会保留。HTTP Item 只接受图片类型的 Init、End 和有序 Control Frame，选择器只列出 active Asset；已引用后再归档的输入仍保留，直到用户明确移除。
+
+### 本机视频 CLI
+
+HTTP 尚未覆盖的 `ref_video`、参考音频或模型专用预处理可使用本机 CLI Preset。Batch 选择 `local_cli` 执行类型后使用对应 Preset，命令由 `/bin/bash -lc` 执行；可配置准备命令、主命令、绝对工作目录、环境、超时、停止宽限、日志容量、默认参数和唯一输出声明。每个 Attempt 的目录固定为：
+
+```text
+<data-dir>/video-workspace/<attempt-id>/
+├── manifest.json
+├── inputs/
+└── outputs/
+```
+
+`output_relative_path` 必须是 `outputs/` 下的精确相对路径，例如 `outputs/result.webm`；`{{OUTPUT_PATH}}` 会展开为该 Attempt 下的精确绝对路径。工作台只读取这个文件，不扫描“最新结果”。命令成功后还会核对大小上限、声明扩展名/MIME 与基本文件魔数，验证通过才导入 Asset。官方 HTTP 结果限定为 WebM、Animated WebP 或 MJPG AVI；自定义本机 CLI 还可声明 `video/mp4` + `.mp4` 或 `video/quicktime` + `.mov`。
+
+Init、End、Control 和 CLI“所选素材”只暂存用户为该 Item 选择的 Asset。工作台按顺序校验并私有复制到 `inputs/`，外部命令改写暂存文件不会影响规范 Asset；`manifest.json` 记录 Asset ID、内容哈希、MIME、大小、角色、顺序、相对路径和 `copy` 暂存方式。CLI 所选素材可填写 `reference_image`、`reference_video`、`reference_audio` 或自定义角色；顺序保持不变。准备命令成功后才执行主命令，用户可用 `{{SELECTED_ASSETS_JSON}}` 或 `{{MANIFEST_PATH}}` 把这些角色转换成模型参数。
+
+常用模板变量包括 `ATTEMPT_ID`、`WORKSPACE_DIR`、`INPUT_DIR`、`OUTPUT_DIR`、`OUTPUT_PATH`、`PROMPT`、`NEGATIVE_PROMPT`、`SEED`、`FPS`、`VIDEO_FRAMES`、`DURATION_SECONDS`、`INIT_IMAGE`、`END_IMAGE`、`CONTROL_FRAMES_JSON`、`SELECTED_ASSETS_JSON` 和 `MANIFEST_PATH`。普通变量会作为单个 Shell 参数安全引用；`{{EXTRA_ARGS_RAW}}` 会原样插入，只能接收自己信任的复合命令片段。终态工作区默认保留；页面中的“清理工作区”只删除对应 Attempt 目录并要求再次确认，不影响已经导入 Asset 的受控内容。
+
+### 尾帧、日志与 Asset
+
+Tail Frame Preset 是另一类本机命令模板，使用 `{{INPUT_VIDEO}}`、`{{OUTPUT_IMAGE}}` 和 `{{ASSET_ID}}`；不要把视频 CLI 的 `OUTPUT_PATH` 写进 Tail 模板。工作台为每次提取创建 `<data-dir>/video-workspace/tail-<extraction-id>`，把源视频私有复制到其中，验证输出图片存在、非空、未超限且扩展名/MIME/魔数一致后导入；正常的成功、失败或取消路径会尝试清理该临时目录。若工作台进程被硬终止，或操作系统拒绝删除，`tail-<extraction-id>` 可能残留，可在确认没有同数据目录实例运行后手工清理。
+
+视频和尾帧结果都默认进入 `archive`，仍可在当前结果区和 Gallery 查看。其他模块的 Asset Picker 只展示 `active`；要复用结果时先设为精选。视频页的“作为首帧”操作会明确显示目标 Item，先自动把尾帧设为 active，再打开现有或新 Item 草稿；只有用户点击“保存请求项”才会写入。所有 Asset 内容只能通过工作台的受控内容 URL 预览或下载，CLI 工作区路径不会成为公开文件路径。
+
+视频 CLI 与 Tail 的 stdout/stderr 以原始字节保存在有界内存日志中，并通过折叠的实时视图按绝对 byte offset 展示，不自动落盘。SSE 快照会把实际保留容量传给页面，浏览器也只保留同样大小的最新字节窗口；“清屏”会释放页面中的旧字节，但不修改 Server 端日志。只有点击“保存日志”才写入数据目录。取消本机 CLI/Tail 会终止整个受管进程组；浏览器离开视频模块只关闭 SSE，不取消任务。
+
+Remote Worker 不执行 Video CLI/Tail，也不传输 Asset、Prompt 或结果。云端只需要由 Worker 拉起模型 Server，再把模型 Server 的另一个回环端口通过 SSH 隧道映射给 HTTP Provider；需要本地文件的 CLI 工作流仍在 `ai-workbench` 所在主机执行。
 
 ## 共享资产与 Gallery
 
