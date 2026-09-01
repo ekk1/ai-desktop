@@ -96,7 +96,7 @@ func TestCLIExecutorStopCancellationStillKillsAndReapsGroup(t *testing.T) {
 
 func TestCLIExecutorStopKillsTermIgnoringChildAfterShellExitsZero(t *testing.T) {
 	executor := NewCLIExecutor()
-	request := fixtureCLIRunRequest(t, "", `(trap '' TERM; exec sleep 30) & child=$!; printf '%s' "$child" > "$OUTPUT_DIR/child"; trap 'exit 0' TERM; while :; do sleep 30; done`)
+	request := fixtureCLIRunRequest(t, "", `trap 'exit 0' TERM; (trap '' TERM; exec sleep 30) & child=$!; printf '%s' "$child" > "$OUTPUT_DIR/child"; while :; do sleep 30; done`)
 	request.StopGrace = 30 * time.Millisecond
 	completed := runCLIAsync(executor, request)
 	status := waitForCLIProcess(t, executor, request.AttemptID, CLIStateRunning)
