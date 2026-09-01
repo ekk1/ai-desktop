@@ -1055,7 +1055,7 @@ git diff --stat
 
 Expected: 占位扫描无输出；状态只包含本 Task 文档；最终代码审查无 Critical/Important 未处理问题。
 
-- [ ] **Step 7: 提交、推送并核对远端**
+- [x] **Step 7: 提交、推送并核对远端**
 
 ```bash
 git add README.md docs/superpowers/specs/2026-08-30-local-ai-workbench-design.md docs/superpowers/specs/2026-08-31-video-workspace-design.md docs/superpowers/plans/2026-08-31-video-workspace.md
